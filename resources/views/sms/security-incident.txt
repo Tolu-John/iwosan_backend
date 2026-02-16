@@ -1,0 +1,6 @@
+Security incident detected.
+Type: {{ $incident->type }}
+Severity: {{ $incident->severity }}
+Route: {{ $incident->route ?? 'n/a' }}
+IP: {{ $incident->ip ?? 'n/a' }}
+Time: {{ $incident->created_at }}
