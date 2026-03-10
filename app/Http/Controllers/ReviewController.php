@@ -8,7 +8,9 @@ use App\Models\Consultation;
 use App\Models\Review;
 use App\Services\AccessService;
 use Carbon\Carbon;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 
@@ -80,29 +82,29 @@ class ReviewController extends Controller
      */
     public function store(Request $request)
     {
-         
-        $data=$request->all();
-
         $currentPatientId = $this->access->currentPatientId();
         if (!$currentPatientId) {
             return response()->json(['message' => 'Only patients can create reviews.'], 403);
         }
 
-    $validator = Validator::make($request->all(), [
-            'patient_id' => 'required',
-            'carer_id' => 'required',
-            'consultation_id' => 'required',
-            'text' => 'required',
+        $validator = Validator::make($request->all(), [
+            'patient_id' => 'required|integer|exists:patients,id',
+            'carer_id' => 'required|integer|exists:carers,id',
+            'consultation_id' => 'required|integer|exists:consultations,id',
+            'text' => 'required|string|min:2|max:2000',
             'rating' => 'required|numeric|min:1|max:5',
-            'recomm' => 'required',
-            'tags' => 'nullable|array',
-            'status' => 'nullable|string|in:pending,published,rejected',
-           
+            'recomm' => 'required|in:yes,no,1,0,true,false',
+            'tags' => 'nullable|array|max:10',
+            'tags.*' => 'string|max:64',
         ]);
 
         if ($validator->fails()) {
-            return response(['Validation errors' => $validator->errors()->all()], 422);
+            return response()->json([
+                'message' => 'Validation failed.',
+                'errors' => $validator->errors(),
+            ], 422);
         }
+        $data = $validator->validated();
 
         if ($currentPatientId && (int) $data['patient_id'] !== (int) $currentPatientId) {
             return response()->json(['message' => 'Forbidden'], 403);
@@ -128,28 +130,38 @@ class ReviewController extends Controller
             return response()->json(['message' => 'Consultation carer mismatch.'], 422);
         }
 
-        $review = new Review();
-        $review->patient_id=$data['patient_id'];
-        $review->carer_id=$data['carer_id'];
-        $review->consultation_id=$data['consultation_id'];
-        $review->text=$data['text'];
-        $review->rating=$data['rating'];
-        $review->recomm=$data['recomm'];
-        $review->tags = isset($data['tags']) ? json_encode($data['tags']) : null;
-        $review->status = 'published';
-        $review->save();
+        try {
+            $review = DB::transaction(function () use ($data) {
+                $review = new Review();
+                $review->patient_id = (int) $data['patient_id'];
+                $review->carer_id = (int) $data['carer_id'];
+                $review->consultation_id = (int) $data['consultation_id'];
+                $review->text = trim($data['text']);
+                $review->rating = (float) $data['rating'];
+                $review->recomm = $this->normalizeRecommend($data['recomm']);
+                $review->tags = $data['tags'] ?? null;
+                $review->status = 'published';
+                $review->save();
 
-        $this->logAudit($review, 'created', $review->getAttributes());
-        
+                $this->logAudit($review, 'created', $review->getAttributes());
 
-        $carer=Carer::find($data['carer_id']);
-        $carer->rating= Review::where('carer_id',$data['carer_id'])->avg('rating');
-        $carer->save();
+                $carer = Carer::find($review->carer_id);
+                if ($carer) {
+                    $carer->rating = (float) Review::where('carer_id', $review->carer_id)->avg('rating');
+                    $carer->save();
+                }
 
+                return $review->load(['patient.user', 'consultation.carer.user', 'consultation.carer.hospital']);
+            });
+        } catch (QueryException $e) {
+            // Handle race condition against unique(patient_id, consultation_id).
+            if ((string) $e->getCode() === '23000') {
+                return response()->json(['message' => 'Review already exists for this consultation.'], 422);
+            }
+            throw $e;
+        }
 
-
-        return response( new ReviewResource($review)
-        , 200);
+        return response(new ReviewResource($review), 200);
     }
 
     /**
@@ -167,7 +179,7 @@ class ReviewController extends Controller
 
         $this->authorize('view', $review);
         
-            return response(new ReviewResource($review)
+            return response(new ReviewResource($review->loadMissing(['patient.user', 'consultation.carer.user', 'consultation.carer.hospital']))
             , 200);
     }
 
@@ -191,22 +203,25 @@ class ReviewController extends Controller
      */
     public function update(Request $request, $id)
     {
-        
-         
-        $data=$request->all();
+        if ($this->access->currentPatientId()) {
+            return response()->json(['message' => 'Patients cannot edit reviews once submitted.'], 403);
+        }
 
-    $validator = Validator::make($request->all(), [
-            'text' => 'required',
+        $validator = Validator::make($request->all(), [
+            'text' => 'required|string|min:2|max:2000',
             'rating' => 'required|numeric|min:1|max:5',
-            'recomm' => 'required',
-            'tags' => 'nullable|array',
-            'status' => 'nullable|string|in:pending,published,rejected',
-           
+            'recomm' => 'required|in:yes,no,1,0,true,false',
+            'tags' => 'nullable|array|max:10',
+            'tags.*' => 'string|max:64',
         ]);
         
         if ($validator->fails()) {
-            return response(['Validation errors' => $validator->errors()->all()], 422);
+            return response()->json([
+                'message' => 'Validation failed.',
+                'errors' => $validator->errors(),
+            ], 422);
         }
+        $data = $validator->validated();
 
 
         
@@ -215,32 +230,7 @@ class ReviewController extends Controller
             return $this->sendError('Review not found.');
         }
 
-        $currentPatientId = $this->access->currentPatientId();
-        if (!$currentPatientId || (int) $review->patient_id !== (int) $currentPatientId) {
-            return response()->json(['message' => 'Only the patient can update this review.'], 403);
-        }
-
-        if (isset($data['patient_id']) && (int) $data['patient_id'] !== (int) $review->patient_id) {
-            return response()->json(['message' => 'Patient mismatch.'], 422);
-        }
-        if (isset($data['carer_id']) && (int) $data['carer_id'] !== (int) $review->carer_id) {
-            return response()->json(['message' => 'Carer mismatch.'], 422);
-        }
-        if (isset($data['consultation_id']) && (int) $data['consultation_id'] !== (int) $review->consultation_id) {
-            return response()->json(['message' => 'Consultation mismatch.'], 422);
-        }
-        $before = $review->getAttributes();
-        $review->text=$data['text'];
-        $review->rating=$data['rating'];
-        $review->recomm=$data['recomm'];
-        $review->tags = isset($data['tags']) ? json_encode($data['tags']) : null;
-        $review->status = $review->status ?? 'published';
-        $review->edited_at = Carbon::now();
-        $review->save();
-        $this->logAudit($review, 'updated', $this->diffChanges($before, $review->getAttributes()));
-        
-        return response( new ReviewResource($review)
-        , 200);
+        return response()->json(['message' => 'Review updates are not allowed.'], 403);
 
     }
 
@@ -298,14 +288,11 @@ class ReviewController extends Controller
         }
 
         $currentPatientId = $this->access->currentPatientId();
-        if (!$currentPatientId || (int) $Review->patient_id !== (int) $currentPatientId) {
-            return response()->json(['message' => 'Only the patient can delete this review.'], 403);
+        if ($currentPatientId) {
+            return response()->json(['message' => 'Patients cannot delete reviews once submitted.'], 403);
         }
 
-        $Review->delete();
-        $this->logAudit($Review, 'deleted', $Review->getAttributes());
-
-        return response(['message' => 'Deleted']);
+        return response()->json(['message' => 'Review deletion is not allowed.'], 403);
     }
 
     public function audit(Request $request, $id)
@@ -357,7 +344,10 @@ class ReviewController extends Controller
             $query->where('text', 'like', '%'.$q.'%');
         }
 
-        $paginator = $query->orderBy('updated_at', 'desc')->paginate($perPage, ['*'], 'page', $page);
+        $paginator = $query
+            ->with(['patient.user', 'consultation.carer.user', 'consultation.carer.hospital'])
+            ->orderBy('updated_at', 'desc')
+            ->paginate($perPage, ['*'], 'page', $page);
 
         return [
             'data' => ReviewResource::collection($paginator->getCollection()),
@@ -368,6 +358,12 @@ class ReviewController extends Controller
                 'last_page' => $paginator->lastPage(),
             ],
         ];
+    }
+
+    private function normalizeRecommend(string $value): bool
+    {
+        $normalized = strtolower(trim($value));
+        return in_array($normalized, ['yes', '1', 'true'], true);
     }
 
     private function logAudit(Review $review, string $action, ?array $changes): void

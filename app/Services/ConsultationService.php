@@ -17,12 +17,23 @@ class ConsultationService
     public const TYPE_HOME_ADMITTED = 'Home visit Admitted';
 
     private const STATUS_DESCRIPTIONS = [
+        'draft' => 'Draft',
         'pending_payment' => 'Awaiting payment',
         'scheduled' => 'Scheduled',
         'in_progress' => 'In progress',
         'completed' => 'Completed',
         'cancelled' => 'Cancelled',
         'no_show' => 'No show',
+    ];
+
+    private const STATUS_TRANSITIONS = [
+        'draft' => ['pending_payment', 'scheduled', 'in_progress', 'completed', 'cancelled'],
+        'pending_payment' => ['draft', 'scheduled', 'cancelled'],
+        'scheduled' => ['draft', 'in_progress', 'completed', 'cancelled', 'no_show'],
+        'in_progress' => ['draft', 'completed', 'cancelled'],
+        'completed' => [],
+        'cancelled' => [],
+        'no_show' => [],
     ];
 
     private StatusChangeService $statusChanges;
@@ -40,15 +51,15 @@ class ConsultationService
         $currentCarerId = $access->currentCarerId();
         $currentHospitalId = $access->currentHospitalId();
 
-        if ($currentCarerId) {
-            abort(403, 'Forbidden');
-        }
-
-        if (!$currentPatientId && !$currentHospitalId) {
+        if (!$currentPatientId && !$currentCarerId && !$currentHospitalId) {
             abort(403, 'Forbidden');
         }
 
         if ($currentPatientId && (int) $data['patient_id'] !== (int) $currentPatientId) {
+            abort(403, 'Forbidden');
+        }
+
+        if ($currentCarerId && (int) $data['carer_id'] !== (int) $currentCarerId) {
             abort(403, 'Forbidden');
         }
 
@@ -69,6 +80,7 @@ class ConsultationService
             $consultation->save();
 
             $this->syncSubtype($consultation, $data);
+            $this->syncTreatmentPlanArtifacts($consultation, $data['treatment_plan'] ?? null);
             $this->recordStatusChange($consultation, null, $data['status'], $data['status_reason'] ?? null);
 
             return $consultation;
@@ -121,6 +133,7 @@ class ConsultationService
             $consultation->save();
 
             $this->syncSubtype($consultation, $data);
+            $this->syncTreatmentPlanArtifacts($consultation, $data['treatment_plan'] ?? null);
             $this->handlePaymentSideEffects($paymentId, $fromStatus, $nextStatus);
             $this->recordStatusChange($consultation, $fromStatus, $nextStatus, $data['status_reason'] ?? null);
 
@@ -134,13 +147,15 @@ class ConsultationService
         $consultation->carer_id = $data['carer_id'];
         $consultation->hospital_id = $data['hospital_id'];
         $consultation->status = $data['status'];
-        $consultation->payment_id = $data['payment_id'];
+        if ($isCreate || array_key_exists('payment_id', $data)) {
+            $consultation->payment_id = $data['payment_id'] ?? null;
+        }
         $consultation->treatment_type = $data['treatment_type'];
         $consultation->diagnosis = $data['diagnosis'];
         $consultation->consult_notes = $data['consult_notes'];
         $consultation->date_time = $data['date_time'];
 
-        if (!$isCreate) {
+        if (!$isCreate && array_key_exists('review_id', $data) && $data['review_id'] !== null) {
             $consultation->review_id = $data['review_id'];
         }
     }
@@ -251,6 +266,11 @@ class ConsultationService
             return;
         }
 
+        $allowedNext = self::STATUS_TRANSITIONS[$fromStatus] ?? [];
+        if (!in_array($toStatus, $allowedNext, true)) {
+            abort(422, "Invalid consultation status transition: {$fromStatus} -> {$toStatus}.");
+        }
+
         if (in_array($toStatus, ['scheduled', 'in_progress', 'completed'], true)) {
             $this->assertPaymentState($toStatus, $paymentId);
         }
@@ -266,8 +286,8 @@ class ConsultationService
 
     private function assertCanCancel(Consultation $consultation, string $fromStatus, AccessService $access): void
     {
-        if (!in_array($fromStatus, ['pending_payment', 'scheduled'], true)) {
-            abort(422, 'Only pending or scheduled consultations can be cancelled.');
+        if (!in_array($fromStatus, ['draft', 'pending_payment', 'scheduled', 'in_progress'], true)) {
+            abort(422, 'Only draft, pending, scheduled, or in-progress consultations can be cancelled.');
         }
 
         $now = Carbon::now();
@@ -369,5 +389,280 @@ class ConsultationService
         } catch (\Throwable $e) {
             return null;
         }
+    }
+
+    private function syncTreatmentPlanArtifacts(Consultation $consultation, ?array $plan): void
+    {
+        if (!is_array($plan)) {
+            return;
+        }
+
+        DB::table('consultation_plans')
+            ->where('consultation_id', $consultation->id)
+            ->delete();
+        DB::table('consultation_medications')
+            ->where('consultation_id', $consultation->id)
+            ->delete();
+        DB::table('consultation_lab_orders')
+            ->where('consultation_id', $consultation->id)
+            ->delete();
+        DB::table('consultation_referrals')
+            ->where('consultation_id', $consultation->id)
+            ->delete();
+        DB::table('consultation_care_advices')
+            ->where('consultation_id', $consultation->id)
+            ->delete();
+        DB::table('consultation_observations')
+            ->where('consultation_id', $consultation->id)
+            ->delete();
+        if (\Illuminate\Support\Facades\Schema::hasTable('consultation_clinical_summaries')) {
+            DB::table('consultation_clinical_summaries')
+                ->where('consultation_id', $consultation->id)
+                ->delete();
+        }
+        if (\Illuminate\Support\Facades\Schema::hasTable('consultation_follow_ups')) {
+            DB::table('consultation_follow_ups')
+                ->where('consultation_id', $consultation->id)
+                ->delete();
+        }
+        if (\Illuminate\Support\Facades\Schema::hasTable('consultation_warning_signs')) {
+            DB::table('consultation_warning_signs')
+                ->where('consultation_id', $consultation->id)
+                ->delete();
+        }
+
+        $now = now();
+        $notesFollowUp = $this->extractLineValue($consultation->consult_notes, 'Follow-up:');
+        $types = [];
+        if (isset($plan['types']) && is_array($plan['types'])) {
+            foreach ($plan['types'] as $type) {
+                $value = trim((string) $type);
+                if ($value !== '') {
+                    $types[$value] = true;
+                }
+            }
+        }
+
+        $planIds = [];
+        foreach (array_keys($types) as $type) {
+            $planId = DB::table('consultation_plans')->insertGetId([
+                'consultation_id' => $consultation->id,
+                'plan_type' => $type,
+                'status' => 'active',
+                'version' => 1,
+                'payload_json' => json_encode($plan, JSON_UNESCAPED_UNICODE),
+                'entered_by' => $consultation->carer_id,
+                'entered_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            $planIds[$type] = $planId;
+        }
+
+        if (isset($plan['medications']) && is_array($plan['medications'])) {
+            foreach ($plan['medications'] as $med) {
+                if (!is_array($med)) {
+                    continue;
+                }
+                $drugName = trim((string) ($med['name'] ?? ''));
+                if ($drugName === '') {
+                    continue;
+                }
+                DB::table('consultation_medications')->insert([
+                    'consultation_id' => $consultation->id,
+                    'plan_id' => $planIds['medication'] ?? null,
+                    'drug_name' => $drugName,
+                    'strength_value' => is_numeric($med['strengthValue'] ?? null) ? (float) $med['strengthValue'] : null,
+                    'strength_unit' => $med['strengthUnit'] ?? null,
+                    'dose_amount' => is_numeric($med['doseAmount'] ?? null) ? (float) $med['doseAmount'] : null,
+                    'dose_unit' => $med['doseUnit'] ?? null,
+                    'route' => $med['route'] ?? null,
+                    'formulation' => $med['form'] ?? null,
+                    'frequency_code' => $med['frequencyCode'] ?? null,
+                    'duration_days' => is_numeric($med['durationDays'] ?? null) ? (int) $med['durationDays'] : null,
+                    'prn' => (bool) ($med['prn'] ?? false),
+                    'max_daily_dose' => $med['maxDailyDose'] ?? null,
+                    'indication' => $med['indication'] ?? null,
+                    'instructions' => $med['specialInstructions'] ?? null,
+                    'status' => 'active',
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+            }
+        }
+
+        if (isset($plan['lab_orders']) && is_array($plan['lab_orders'])) {
+            foreach ($plan['lab_orders'] as $order) {
+                if (!is_array($order)) {
+                    continue;
+                }
+                $orderId = DB::table('consultation_lab_orders')->insertGetId([
+                    'consultation_id' => $consultation->id,
+                    'plan_id' => $planIds['lab_order'] ?? null,
+                    'urgency' => trim((string) ($order['urgency'] ?? 'routine')) ?: 'routine',
+                    'fasting_required' => (bool) ($order['fastingRequired'] ?? false),
+                    'clinical_question' => $order['clinicalQuestion'] ?? null,
+                    'status' => 'ordered',
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+
+                if (isset($order['tests']) && is_array($order['tests'])) {
+                    foreach ($order['tests'] as $test) {
+                        $testName = trim((string) $test);
+                        if ($testName === '') {
+                            continue;
+                        }
+                        DB::table('consultation_lab_order_items')->insert([
+                            'lab_order_id' => $orderId,
+                            'test_name' => $testName,
+                            'created_at' => $now,
+                            'updated_at' => $now,
+                        ]);
+                    }
+                }
+            }
+        }
+
+        if (isset($plan['care_advice']) && is_array($plan['care_advice'])) {
+            foreach ($plan['care_advice'] as $advice) {
+                $label = trim((string) $advice);
+                if ($label === '') {
+                    continue;
+                }
+                DB::table('consultation_care_advices')->insert([
+                    'consultation_id' => $consultation->id,
+                    'plan_id' => $planIds['care_advice'] ?? null,
+                    'label' => $label,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+            }
+        }
+
+        if (isset($plan['referral']) && is_array($plan['referral'])) {
+            DB::table('consultation_referrals')->insert([
+                'consultation_id' => $consultation->id,
+                'plan_id' => $planIds['referral'] ?? null,
+                'destination_type' => $plan['referral']['destinationType'] ?? $plan['referral']['target'] ?? null,
+                'specialty' => $plan['referral']['specialty'] ?? null,
+                'reason' => $plan['referral']['reason'] ?? null,
+                'urgency' => trim((string) ($plan['referral']['urgency'] ?? 'routine')) ?: 'routine',
+                'status' => 'active',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+
+        if (isset($plan['observation']) && is_array($plan['observation'])) {
+            DB::table('consultation_observations')->insert([
+                'consultation_id' => $consultation->id,
+                'plan_id' => $planIds['observation'] ?? null,
+                'monitoring_payload' => json_encode($plan['observation'], JSON_UNESCAPED_UNICODE),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+
+        if (\Illuminate\Support\Facades\Schema::hasTable('consultation_clinical_summaries')) {
+            $summary = is_array($plan['clinical_summary'] ?? null) ? $plan['clinical_summary'] : [];
+            $notesChiefComplaint = $this->extractLineValue($consultation->consult_notes, 'Chief complaint:');
+            $notesHistory = $this->extractLineValue($consultation->consult_notes, 'History:');
+            $notesDiagnosis = $this->extractLineValue($consultation->consult_notes, 'Assessment/Diagnosis:');
+            $notesRiskLevel = $this->extractLineValue($consultation->consult_notes, 'Risk level:');
+            $notesDisposition = $this->extractLineValue($consultation->consult_notes, 'Disposition:');
+            $notesEncounterDuration = $this->extractLineValue($consultation->consult_notes, 'Encounter duration:');
+            if ($notesEncounterDuration !== null && str_contains($notesEncounterDuration, '(est.')) {
+                $notesEncounterDuration = trim(explode('(est.', $notesEncounterDuration)[0]);
+            }
+            DB::table('consultation_clinical_summaries')->insert([
+                'consultation_id' => $consultation->id,
+                'chief_complaint' => $summary['chief_complaint'] ?? $plan['chiefComplaint'] ?? $notesChiefComplaint,
+                'chief_complaint_symptoms' => json_encode($summary['chief_complaint_symptoms'] ?? $plan['chiefComplaintSymptoms'] ?? [], JSON_UNESCAPED_UNICODE),
+                'chief_complaint_duration' => $summary['chief_complaint_duration'] ?? $plan['chiefComplaintDuration'] ?? null,
+                'chief_complaint_severity' => $summary['chief_complaint_severity'] ?? $plan['chiefComplaintSeverity'] ?? null,
+                'history' => $summary['history'] ?? $plan['history'] ?? $notesHistory,
+                'diagnosis' => $summary['diagnosis'] ?? $plan['diagnosis'] ?? $notesDiagnosis ?? $consultation->diagnosis,
+                'risk_level' => $summary['risk_level'] ?? $plan['riskLevel'] ?? $notesRiskLevel,
+                'disposition' => $summary['disposition'] ?? $plan['disposition'] ?? $notesDisposition,
+                'duration_bucket' => $summary['duration_bucket'] ?? $plan['durationBucket'] ?? $notesEncounterDuration,
+                'treatment_note' => $plan['treatment_note'] ?? $plan['treatmentNote'] ?? null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+
+        if (\Illuminate\Support\Facades\Schema::hasTable('consultation_follow_ups')) {
+            $followUp = is_array($plan['follow_up'] ?? null) ? $plan['follow_up'] : [];
+            $nextStep = $followUp['next_step'] ?? $plan['nextStep'] ?? null;
+            $timing = $followUp['timing'] ?? $plan['followUpTiming'] ?? null;
+            $note = $followUp['note'] ?? $plan['followUpNote'] ?? $notesFollowUp;
+
+            if (!$nextStep && $notesFollowUp) {
+                $nextStepMatch = [];
+                if (preg_match('/next step:\s*([^.]+)/i', $notesFollowUp, $nextStepMatch) === 1) {
+                    $nextStep = trim((string) ($nextStepMatch[1] ?? ''));
+                }
+            }
+            if (!$timing && $notesFollowUp) {
+                $timingMatch = [];
+                if (preg_match('/follow-up:\s*([^.]+)/i', $notesFollowUp, $timingMatch) === 1) {
+                    $timing = trim((string) ($timingMatch[1] ?? ''));
+                }
+            }
+            if ($nextStep !== null || $timing !== null || $note !== null) {
+                DB::table('consultation_follow_ups')->insert([
+                    'consultation_id' => $consultation->id,
+                    'next_step' => $nextStep,
+                    'timing' => $timing,
+                    'note' => $note,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+            }
+        }
+
+        if (\Illuminate\Support\Facades\Schema::hasTable('consultation_warning_signs')) {
+            $warningSigns = $plan['follow_up']['warning_signs']
+                ?? $plan['observation']['warningSigns']
+                ?? $plan['warningSigns']
+                ?? [];
+            if ((!is_array($warningSigns) || empty($warningSigns)) && !empty($notesFollowUp)) {
+                $warningMatch = [];
+                if (preg_match('/return\/seek urgent care if:\s*(.+)$/i', $notesFollowUp, $warningMatch) === 1) {
+                    $warningSigns = array_filter(array_map('trim', explode(',', (string) ($warningMatch[1] ?? ''))));
+                }
+            }
+            if (is_array($warningSigns)) {
+                foreach ($warningSigns as $warningSign) {
+                    $label = trim((string) $warningSign);
+                    if ($label === '') {
+                        continue;
+                    }
+                    DB::table('consultation_warning_signs')->insert([
+                        'consultation_id' => $consultation->id,
+                        'label' => $label,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                }
+            }
+        }
+    }
+
+    private function extractLineValue(?string $notes, string $prefix): ?string
+    {
+        if (!$notes) {
+            return null;
+        }
+        foreach (preg_split('/\r\n|\r|\n/', $notes) as $line) {
+            $trimmed = trim((string) $line);
+            if ($trimmed === '' || stripos($trimmed, $prefix) !== 0) {
+                continue;
+            }
+            $value = trim(substr($trimmed, strlen($prefix)));
+            return $value !== '' ? $value : null;
+        }
+        return null;
     }
 }
