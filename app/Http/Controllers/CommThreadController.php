@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Appointment;
 use App\Models\CommParticipant;
 use App\Models\CommThread;
 use App\Models\Consultation;
@@ -22,19 +23,33 @@ class CommThreadController extends Controller
     public function index(Request $request)
     {
         $consultationId = $request->query('consultation_id');
-        if (!$consultationId) {
-            return response()->json(['message' => 'consultation_id is required'], 422);
+        $appointmentId = $request->query('appointment_id');
+        if (!$consultationId && !$appointmentId) {
+            return response()->json(['message' => 'consultation_id or appointment_id is required'], 422);
         }
 
-        $consultation = Consultation::find($consultationId);
-        if (!$consultation) {
-            return response()->json(['message' => 'Consultation not found'], 404);
+        if ($consultationId) {
+            $consultation = Consultation::find($consultationId);
+            if (!$consultation) {
+                return response()->json(['message' => 'Consultation not found'], 404);
+            }
+            if (!$this->access->canAccessConsultation($consultation)) {
+                return response()->json(['message' => 'Forbidden'], 403);
+            }
+            $threads = CommThread::where('consultation_id', $consultationId)->get();
+            return response()->json(['data' => $threads], 200);
         }
-        if (!$this->access->canAccessConsultation($consultation)) {
+
+        $appointment = Appointment::find($appointmentId);
+        if (!$appointment) {
+            return response()->json(['message' => 'Appointment not found'], 404);
+        }
+        if (!$this->access->canAccessAppointment($appointment)) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
-
-        $threads = CommThread::where('consultation_id', $consultationId)->get();
+        $threads = CommThread::where('provider_thread_id', 'appointment:' . $appointment->id)
+            ->where('channel', 'whatsapp')
+            ->get();
         return response()->json(['data' => $threads], 200);
     }
 
@@ -58,7 +73,8 @@ class CommThreadController extends Controller
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'consultation_id' => 'required|integer',
+            'consultation_id' => 'nullable|integer|required_without:appointment_id',
+            'appointment_id' => 'nullable|integer|required_without:consultation_id',
             'channel' => 'nullable|string',
         ]);
 
@@ -67,28 +83,51 @@ class CommThreadController extends Controller
         }
 
         $data = $validator->validated();
-        $consultation = Consultation::find($data['consultation_id']);
-        if (!$consultation) {
-            return response()->json(['message' => 'Consultation not found'], 404);
-        }
-        if (!$this->access->canAccessConsultation($consultation)) {
-            return response()->json(['message' => 'Forbidden'], 403);
-        }
-
+        $consultation = !empty($data['consultation_id'])
+            ? Consultation::find($data['consultation_id'])
+            : null;
+        $appointment = !empty($data['appointment_id'])
+            ? Appointment::find($data['appointment_id'])
+            : null;
         $channel = $data['channel'] ?? 'whatsapp';
-        $thread = CommThread::where('consultation_id', $consultation->id)
-            ->where('channel', $channel)
-            ->first();
+        $thread = null;
 
-        if (!$thread) {
-            $user = Auth::user();
-            $thread = CommThread::create([
-                'consultation_id' => $consultation->id,
-                'channel' => $channel,
-                'status' => 'active',
-                'created_by_user_id' => $user?->id,
-                'created_by_role' => $this->currentRole(),
-            ]);
+        if ($consultation) {
+            if (!$this->access->canAccessConsultation($consultation)) {
+                return response()->json(['message' => 'Forbidden'], 403);
+            }
+            $thread = CommThread::where('consultation_id', $consultation->id)
+                ->where('channel', $channel)
+                ->first();
+
+            if (!$thread) {
+                $user = Auth::user();
+                $thread = CommThread::create([
+                    'consultation_id' => $consultation->id,
+                    'channel' => $channel,
+                    'status' => 'active',
+                    'created_by_user_id' => $user?->id,
+                    'created_by_role' => $this->currentRole(),
+                ]);
+            }
+        } elseif ($appointment) {
+            if (!$this->access->canAccessAppointment($appointment)) {
+                return response()->json(['message' => 'Forbidden'], 403);
+            }
+            $thread = CommThread::firstOrCreate(
+                [
+                    'consultation_id' => null,
+                    'channel' => $channel,
+                    'provider_thread_id' => 'appointment:' . $appointment->id,
+                ],
+                [
+                    'status' => 'active',
+                    'created_by_user_id' => Auth::id(),
+                    'created_by_role' => $this->currentRole(),
+                ]
+            );
+        } else {
+            return response()->json(['message' => 'Consultation or appointment not found'], 404);
         }
 
         $this->ensureParticipant($thread, Auth::user());

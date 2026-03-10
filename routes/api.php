@@ -26,6 +26,7 @@ use App\Http\Controllers\GenVitalController;
 use App\Http\Controllers\DrugController;
 use App\Http\Controllers\HConsultationController;
 use App\Http\Controllers\HospitalController;
+use App\Http\Controllers\HospitalCarerNoteController;
 use App\Http\Controllers\LabResultController;
 use App\Http\Controllers\LabTestController;
 use App\Http\Controllers\OtherVitalsController;
@@ -130,6 +131,15 @@ Route::get('storage/labresult/{filename}', function ($filename)
     return Storage::disk('public')->response($path);
 });
 
+Route::get('storage/appointment/{filename}', function ($filename)
+{
+    $path = 'appointment/'.$filename;
+    if (!Storage::disk('iwosan_files')->exists($path)) {
+        abort(404);
+    }
+    return Storage::disk('iwosan_files')->response($path);
+});
+
 Route::get('storage/certlices/hospital/{filename}', function ($filename)
 {
     $path = 'certlices/hospital/'.$filename;
@@ -163,6 +173,8 @@ Route::middleware('throttle:auth')->group(function () {
 });
 
 Route::prefix('v1')->middleware('throttle:auth')->group(function () {
+    Route::get('/hospital/directory', [HospitalController::class, 'directory']);
+
     Route::post('/patient/register', [AuthControllerP::class, 'register']);
     Route::post('/patient/login', [AuthControllerP::class, 'login']);
 
@@ -179,6 +191,14 @@ Route::middleware('auth:api')->group(function () {
     Route::get('/carer/logout', [AuthControllerC::class, 'logout']);
     Route::get('/hospital/logout', [AuthControllerA::class, 'logout']);
 
+});
+Route::middleware('auth:api')->prefix('v1')->group(function () {
+    Route::get('/patient/logout', [AuthControllerP::class, 'logout']);
+    Route::get('/carer/logout', [AuthControllerC::class, 'logout']);
+    Route::get('/hospital/logout', [AuthControllerA::class, 'logout']);
+    Route::post('/patient/change-password', [AuthControllerP::class, 'changePassword']);
+    Route::post('/carer/change-password', [AuthControllerC::class, 'changePassword']);
+    Route::post('/hospital/change-password', [AuthControllerA::class, 'changePassword']);
 });
 Route::middleware(['auth:api', 'phi.log', 'incident.detect', 'platform.consent'])->prefix('v1')->group(function () {
 
@@ -213,8 +233,10 @@ Route::middleware(['auth:api', 'phi.log', 'incident.detect', 'platform.consent']
         Route::get('/hospital/teletests/{id}', [DashboardControllerA::class, 'getallteletests']);
 
         Route::get('/hospital/carers/{id}', [DashboardControllerA::class, 'getallcarers']);
-        Route::post('/hospital/carer/{id}/review', [DashboardControllerA::class, 'reviewCarer']);
-        Route::get('/hospital/carer/{id}/approvals', [DashboardControllerA::class, 'carerApprovalHistory']);
+        Route::post('/hospital/carer/{carerId}/review', [DashboardControllerA::class, 'reviewCarer']);
+        Route::get('/hospital/carer/{carerId}/approvals', [DashboardControllerA::class, 'carerApprovalHistory']);
+        Route::get('/hospital/carer/{carerId}/notes', [HospitalCarerNoteController::class, 'index']);
+        Route::post('/hospital/carer/{carerId}/notes', [HospitalCarerNoteController::class, 'store']);
 
         Route::get('/hospital/complaints/{id}', [DashboardControllerA::class, 'getcomplaints']);
 
@@ -234,6 +256,7 @@ Route::middleware(['auth:api', 'phi.log', 'incident.detect', 'platform.consent']
     Route::get('/hospital/carer_metrics/{id}', [DashboardControllerA::class, 'carermetrics']);
 
         Route::get('/hospital/certlices/{id}', [DashboardControllerA::class, 'hospital_certs']);
+        Route::get('/hospital/profile-lite/{id}', [HospitalController::class, 'profileLite']);
     });
 
 
@@ -241,9 +264,13 @@ Route::middleware(['auth:api', 'phi.log', 'incident.detect', 'platform.consent']
 
     // carer dashboard
     Route::middleware('role.carer')->group(function () {
+        Route::post('/carer/reapply-approval', [CarerController::class, 'reapplyApproval']);
+        Route::get('/carer/{carer}/appointment-settings', [CarerController::class, 'appointmentSettings']);
+        Route::put('/carer/{carer}/appointment-settings', [CarerController::class, 'updateAppointmentSettings']);
         Route::get('/carer/showappointment/{id}', [DashboardControllerC::class, 'showappointment']);
     
         Route::get('/carer/showpayments/{id}', [DashboardControllerC::class, 'showpaymentsbymypatients']);
+        Route::get('/carer/patients/{id}', [DashboardControllerC::class, 'carerPatients']);
 
     Route::get('/comm/threads', [CommThreadController::class, 'index']);
     Route::post('/comm/threads', [CommThreadController::class, 'store']);
@@ -279,6 +306,11 @@ Route::middleware(['auth:api', 'phi.log', 'incident.detect', 'platform.consent']
 
     // patient dashboard
     Route::middleware('role.patient')->group(function () {
+        Route::get('/patient/settings', [PatientController::class, 'mySettings']);
+        Route::put('/patient/settings', [PatientController::class, 'updateMySettings']);
+        Route::get('/patient/{patient}/settings', [PatientController::class, 'settings']);
+        Route::put('/patient/{patient}/settings', [PatientController::class, 'updateSettings']);
+
         Route::get('/patient/prescriptions/{id}', [DashboardControllerP::class, 'prescriptions']);
 
         Route::get('/patient/search_carers', [DashboardControllerP::class, 'searchcarers']);
@@ -467,6 +499,8 @@ Route::patch('/transfer/{id}/status', [TransfersController::class, 'update']);
 Route::apiResource('/teletest', TeletestController::class);
 
 
+Route::patch('/test/{id}/status', [TestController::class, 'updateStatus']);
+Route::post('/test/{id}/duplicate', [TestController::class, 'duplicate']);
 Route::apiResource('/test', TestController::class);
 
 

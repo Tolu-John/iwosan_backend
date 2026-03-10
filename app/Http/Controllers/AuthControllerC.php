@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\Auth\LoginCarerRequest;
 use App\Http\Requests\Auth\RegisterCarerRequest;
+use App\Http\Requests\Auth\ChangePasswordRequest;
 use App\Services\AuthService;
 use Illuminate\Http\Request;
 
@@ -58,5 +59,21 @@ class AuthControllerC extends Controller
         }
 
         return response(['message' => 'You have been successfully logged out!'], 200);
+    }
+
+    public function changePassword(ChangePasswordRequest $request)
+    {
+        try {
+            $this->auth->changePassword(
+                $request->user(),
+                $request->validated()['current_password'],
+                $request->validated()['password'],
+                'carer'
+            );
+        } catch (\RuntimeException $e) {
+            return response(['message' => $e->getMessage()], 422);
+        }
+
+        return response(['message' => 'Password changed successfully.'], 200);
     }
 }

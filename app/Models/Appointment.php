@@ -40,16 +40,26 @@ class Appointment extends Model
         'status',
         'consult_type',
         'address',
+        'address_lat',
+        'address_lon',
         'price',
         'appointment_type',
         'admin_approved',
         'date_time',
+        'owned_by_role',
+        'owned_by_id',
+        'next_action_at',
         'channel',
-        'extra_notes'
+        'extra_notes',
+        'consent_accepted',
+        'attachments_json',
 
     ];
 
     protected $casts = [
         'address' => EncryptedString::class,
+        'consent_accepted' => 'boolean',
+        'attachments_json' => 'array',
+        'next_action_at' => 'datetime',
     ];
 }

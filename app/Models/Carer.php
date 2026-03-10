@@ -63,11 +63,20 @@ class Carer extends Model
         'onVirtual_leave',
         'admin_approved',
         'qualifications',
+        'primary_qualification',
+        'specialties',
+        'license_number',
+        'issuing_body',
+        'years_experience',
         'virtual_day_time',
         'home_day_time',
         'super_admin_approved',
         'service_radius_km',
         'response_time_minutes'
+    ];
+
+    protected $casts = [
+        'specialties' => 'array',
     ];
 
    

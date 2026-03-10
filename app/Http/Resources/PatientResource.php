@@ -40,6 +40,9 @@ class PatientResource extends JsonResource
                 'other_kin_name'=>$this->other_kin_name,
                 'other_kin_phone'=>$this->other_kin_phone,
                 'other_kin_address'=>$this->other_kin_address,
+                'push_notifications_enabled' => (bool) $this->push_notifications_enabled,
+                'sms_alerts_enabled' => (bool) $this->sms_alerts_enabled,
+                'share_vitals_with_carers' => (bool) $this->share_vitals_with_carers,
     ];
     }
 }

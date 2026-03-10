@@ -18,7 +18,6 @@ class RegisterHospitalRequest extends FormRequest
             'phone' => trim((string) $this->input('phone')),
             'name' => trim((string) $this->input('name')),
             'firedb_id' => trim((string) $this->input('firedb_id')),
-            'code' => trim((string) $this->input('code')),
         ]);
     }
 
@@ -26,11 +25,10 @@ class RegisterHospitalRequest extends FormRequest
     {
         return [
             'name' => 'required|string|max:255',
-            'email' => 'required|email|max:255|unique:hospitals',
+            'email' => 'required|email|max:255|unique:hospitals,email|unique:users,email',
             'password' => 'required|string|min:8|max:255',
             'firedb_id' => 'required|string|max:255',
             'phone' => 'required|string|max:50',
-            'code' => 'required|string|max:255',
         ];
     }
 }

@@ -250,19 +250,79 @@ public function PatientLite($id){
 }
 
 
-public function AllPatientGenVitals($id){
+public function AllPatientGenVitals(Request $request, $id){
     $auth = $this->requirePatientId($id);
     if ($auth instanceof \Illuminate\Http\Response) {
         return $auth;
     }
 
     $snapshot = $this->vitals->patientSnapshot((int) $id);
+    $view = strtolower((string) $request->query('view', 'compact'));
+
+    if ($view === 'full') {
+        return response([
+            'patient_id' => $id,
+            'latest' => collect($snapshot['latest'])->map(fn ($vital) => new Gen_VitalResource($vital)),
+            'series' => collect($snapshot['series'])->map(fn ($list) => Gen_VitalResource::collection($list)),
+            'alerts' => Gen_VitalResource::collection($snapshot['alerts']),
+        ], 200);
+    }
+
+    $latest = collect($snapshot['latest'])
+        ->mapWithKeys(function ($vital, $type) {
+            $resolvedType = (string) ($vital->type ?: $type);
+            if ($resolvedType === 'blood_pressure') {
+                $sys = $vital->systolic !== null ? (string) ((float) $vital->systolic) : '';
+                $dia = $vital->diastolic !== null ? (string) ((float) $vital->diastolic) : '';
+                return [$resolvedType => trim($sys . '/' . $dia, '/')];
+            }
+
+            $value = $vital->value_num ?? $vital->value ?? null;
+            return [$resolvedType => $value !== null ? (string) $value : ''];
+        });
+
+    $series = collect($snapshot['series'])
+        ->flatMap(function ($list, $type) {
+            return collect($list)->map(function ($vital) use ($type) {
+                return [
+                    'id' => (int) $vital->id,
+                    'type' => (string) ($vital->type ?: $type),
+                    'value' => $vital->value_num !== null
+                        ? (float) $vital->value_num
+                        : ($vital->value !== null ? (string) $vital->value : null),
+                    'systolic' => $vital->systolic !== null ? (float) $vital->systolic : null,
+                    'diastolic' => $vital->diastolic !== null ? (float) $vital->diastolic : null,
+                    'unit' => $vital->unit,
+                    'taken_at' => optional($vital->taken_at)->toIso8601String(),
+                    'status_flag' => $vital->status_flag,
+                ];
+            });
+        })
+        ->sortByDesc('taken_at')
+        ->values();
+
+    $alerts = collect($snapshot['alerts'])
+        ->map(function ($vital) {
+            return [
+                'id' => (int) $vital->id,
+                'type' => (string) ($vital->type ?: $vital->name),
+                'status_flag' => (string) $vital->status_flag,
+                'taken_at' => optional($vital->taken_at)->toIso8601String(),
+                'value' => $vital->value_num !== null
+                    ? (float) $vital->value_num
+                    : ($vital->value !== null ? (string) $vital->value : null),
+                'systolic' => $vital->systolic !== null ? (float) $vital->systolic : null,
+                'diastolic' => $vital->diastolic !== null ? (float) $vital->diastolic : null,
+                'unit' => $vital->unit,
+            ];
+        })
+        ->values();
 
     return response([
         'patient_id' => $id,
-        'latest' => collect($snapshot['latest'])->map(fn ($vital) => new Gen_VitalResource($vital)),
-        'series' => collect($snapshot['series'])->map(fn ($list) => Gen_VitalResource::collection($list)),
-        'alerts' => Gen_VitalResource::collection($snapshot['alerts']),
+        'latest' => $latest,
+        'series' => $series,
+        'alerts' => $alerts,
     ], 200);
 
 }

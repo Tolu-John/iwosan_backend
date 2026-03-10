@@ -47,7 +47,9 @@ class HospitalResource extends JsonResource
 
         $user = $request->user();
         if ($user) {
-            $hospitalUser = \App\Models\Hospital::where('firedb_id', $user->firedb_id)->first();
+            $hospitalUser = \App\Models\Hospital::where('user_id', $user->id)
+                ->orWhere('firedb_id', $user->firedb_id)
+                ->first();
             if ($hospitalUser && (int) $hospitalUser->id === (int) $this->id) {
                 $controller = app(\App\Http\Controllers\DashboardControllerA::class);
                 $pendingAppointments = $this->unwrapResponse($controller->pendingappointments(request(), $this->id));

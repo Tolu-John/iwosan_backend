@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\Auth\LoginPatientRequest;
 use App\Http\Requests\Auth\RegisterPatientRequest;
+use App\Http\Requests\Auth\ChangePasswordRequest;
 use App\Services\AuthService;
 use Illuminate\Http\Request;
 
@@ -54,5 +55,21 @@ class AuthControllerP extends Controller
         }
 
         return response(['message' => 'You have been successfully logged out!'], 200);
+    }
+
+    public function changePassword(ChangePasswordRequest $request)
+    {
+        try {
+            $this->auth->changePassword(
+                $request->user(),
+                $request->validated()['current_password'],
+                $request->validated()['password'],
+                'patient'
+            );
+        } catch (\RuntimeException $e) {
+            return response(['message' => $e->getMessage()], 422);
+        }
+
+        return response(['message' => 'Password changed successfully.'], 200);
     }
 }

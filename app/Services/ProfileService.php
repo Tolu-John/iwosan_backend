@@ -41,8 +41,22 @@ class ProfileService
     public function updateCarerProfile(Carer $carer, array $data, bool $isSelfUpdate): Carer
     {
         $userData = $data['user'];
+        $hospital = Hospital::find($data['hospital_id']);
 
         $this->assertUserMatchesCarer($carer, $data);
+
+        // If a carer does not provide profile location fields, inherit hospital location.
+        if ($hospital) {
+            if ($this->isBlank($userData['address'] ?? null)) {
+                $userData['address'] = $hospital->address;
+            }
+            if ($this->isBlank($userData['lat'] ?? null)) {
+                $userData['lat'] = $hospital->lat;
+            }
+            if ($this->isBlank($userData['lon'] ?? null)) {
+                $userData['lon'] = $hospital->lon;
+            }
+        }
 
         $user = User::findOrFail($userData['id']);
         $this->updateUserFromPayload($user, $userData);
@@ -51,11 +65,24 @@ class ProfileService
         $carer->hospital_id = $data['hospital_id'];
         $carer->bio = $data['bio'];
         $carer->position = $data['position'];
-        $carer->onHome_leave = $data['onHome_leave'];
-        $carer->onVirtual_leave = $data['onVirtual_leave'];
-        $carer->virtual_day_time = $data['virtual_day_time'];
-        $carer->home_day_time = $data['home_day_time'];
-        $carer->qualifications = $data['qualifications'];
+        if (array_key_exists('onHome_leave', $data) && !$this->isBlank($data['onHome_leave'])) {
+            $carer->onHome_leave = $data['onHome_leave'];
+        }
+        if (array_key_exists('onVirtual_leave', $data) && !$this->isBlank($data['onVirtual_leave'])) {
+            $carer->onVirtual_leave = $data['onVirtual_leave'];
+        }
+        if (array_key_exists('virtual_day_time', $data) && !$this->isBlank($data['virtual_day_time'])) {
+            $carer->virtual_day_time = $data['virtual_day_time'];
+        }
+        if (array_key_exists('home_day_time', $data) && !$this->isBlank($data['home_day_time'])) {
+            $carer->home_day_time = $data['home_day_time'];
+        }
+        $carer->primary_qualification = $data['primary_qualification'] ?? $carer->primary_qualification;
+        $carer->specialties = $this->normalizeSpecialties($data['specialties'] ?? $carer->specialties);
+        $carer->license_number = $data['license_number'] ?? $carer->license_number;
+        $carer->issuing_body = $data['issuing_body'] ?? $carer->issuing_body;
+        $carer->years_experience = $data['years_experience'] ?? $carer->years_experience;
+        $carer->qualifications = $this->resolveLegacyQualifications($carer, $data);
         $carer->service_radius_km = $data['service_radius_km'] ?? $carer->service_radius_km;
         $carer->response_time_minutes = $data['response_time_minutes'] ?? $carer->response_time_minutes;
 
@@ -65,8 +92,12 @@ class ProfileService
             $data['super_admin_approved'] = $carer->super_admin_approved;
         }
 
-        $carer->admin_approved = $data['admin_approved'];
-        $carer->super_admin_approved = $data['super_admin_approved'];
+        if (array_key_exists('admin_approved', $data) && !$this->isBlank($data['admin_approved'])) {
+            $carer->admin_approved = $data['admin_approved'];
+        }
+        if (array_key_exists('super_admin_approved', $data) && !$this->isBlank($data['super_admin_approved'])) {
+            $carer->super_admin_approved = $data['super_admin_approved'];
+        }
         $carer->save();
 
         return $carer;
@@ -86,7 +117,7 @@ class ProfileService
         $hospital->account_number = $data['account_number'];
         $hospital->account_name = $data['account_name'];
         $hospital->bank_name = $data['bank_name'];
-        $hospital->bank_code = $data['bank_code'];
+        $hospital->bank_code = $data['bank_code'] ?? $hospital->bank_code;
         $hospital->save();
 
         return $hospital;
@@ -127,5 +158,61 @@ class ProfileService
         if (!isset($data['user']['id']) || (int) $data['user']['id'] !== (int) $carer->user_id) {
             abort(403, 'Forbidden');
         }
+    }
+
+    private function isBlank($value): bool
+    {
+        return is_null($value) || trim((string) $value) === '';
+    }
+
+    private function normalizeSpecialties($specialties): array
+    {
+        if (!is_array($specialties)) {
+            return [];
+        }
+
+        $values = array_map(static function ($value) {
+            return trim((string) $value);
+        }, $specialties);
+
+        return array_values(array_filter($values, static function ($value) {
+            return $value !== '';
+        }));
+    }
+
+    private function resolveLegacyQualifications(Carer $carer, array $data): ?string
+    {
+        if (array_key_exists('qualifications', $data) && !$this->isBlank($data['qualifications'])) {
+            return $data['qualifications'];
+        }
+
+        $primary = $data['primary_qualification'] ?? $carer->primary_qualification;
+        $specialties = $this->normalizeSpecialties($data['specialties'] ?? $carer->specialties);
+        $license = $data['license_number'] ?? $carer->license_number;
+        $issuer = $data['issuing_body'] ?? $carer->issuing_body;
+        $years = $data['years_experience'] ?? $carer->years_experience;
+
+        $parts = [];
+        if (!$this->isBlank($primary)) {
+            $parts[] = $primary;
+        }
+        if (!empty($specialties)) {
+            $parts[] = 'Specialties: '.implode(', ', $specialties);
+        }
+        if (!$this->isBlank($license)) {
+            $parts[] = 'License: '.$license;
+        }
+        if (!$this->isBlank($issuer)) {
+            $parts[] = 'Issuer: '.$issuer;
+        }
+        if (!is_null($years) && (string) $years !== '') {
+            $parts[] = 'Experience: '.$years.' years';
+        }
+
+        if (!empty($parts)) {
+            return implode(' | ', $parts);
+        }
+
+        return $carer->qualifications;
     }
 }

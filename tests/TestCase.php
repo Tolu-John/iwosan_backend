@@ -33,7 +33,9 @@ abstract class TestCase extends BaseTestCase
         }
 
         if (Schema::hasTable('oauth_clients') && !Client::where('personal_access_client', 1)->exists()) {
-            Artisan::call('passport:install', ['--force' => true]);
+            // Do not rotate Passport keys during tests; rotating keys invalidates
+            // active app tokens and causes "Unauthenticated" after hot restart.
+            Artisan::call('passport:install');
         }
     }
 }

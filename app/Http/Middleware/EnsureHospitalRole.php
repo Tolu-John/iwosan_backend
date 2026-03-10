@@ -15,7 +15,9 @@ class EnsureHospitalRole
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        $hospital = Hospital::where('firedb_id', $user->firedb_id)->first();
+        $hospital = Hospital::where('user_id', $user->id)
+            ->orWhere('firedb_id', $user->firedb_id)
+            ->first();
         if (!$hospital) {
             return response()->json(['message' => 'Forbidden'], 403);
         }

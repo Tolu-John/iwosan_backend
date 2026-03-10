@@ -30,9 +30,11 @@ class UpdateLabResultRequest extends FormRequest
             'lab_name' => 'required|string|max:255',
             'extra_notes' => 'nullable|string|max:5000',
             'source' => 'nullable|string|max:50',
-            'file' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:10240',
+            'file' => 'nullable|file|max:20480',
             'files' => 'nullable|array|max:2',
-            'files.*' => 'file|mimes:pdf,jpg,jpeg,png|max:10240',
+            'files.*' => 'file|max:20480',
+            'file_base64' => 'nullable|string',
+            'file_name' => 'nullable|string|max:255',
         ];
     }
 }

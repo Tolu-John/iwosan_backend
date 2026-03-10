@@ -66,7 +66,9 @@ class DashboardControllerA extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        $hospital = Hospital::where('firedb_id', $user->firedb_id)->first();
+        $hospital = Hospital::where('user_id', $user->id)
+            ->orWhere('firedb_id', $user->firedb_id)
+            ->first();
         if (!$hospital || (int) $hospital->id !== (int) $id) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
@@ -81,7 +83,9 @@ class DashboardControllerA extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        $hospital = Hospital::where('firedb_id', $user->firedb_id)->first();
+        $hospital = Hospital::where('user_id', $user->id)
+            ->orWhere('firedb_id', $user->firedb_id)
+            ->first();
         if (!$hospital) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
@@ -188,7 +192,7 @@ public function getallcarers(Request $request, $id){
         return $auth;
     }
 
-    $status = $request->query('status', 'approved');
+    $status = $request->query('status', 'all');
     $position = $request->query('position');
     $q = $request->query('q');
     $sort = $request->query('sort', 'rating');
@@ -359,7 +363,7 @@ public function pendingcarers(Request $request, $id){
     ]);
 }
 
-public function reviewCarer(Request $request, $id)
+public function reviewCarer(Request $request, $carerId)
 {
     $hospital = $this->requireHospitalUser();
     if ($hospital instanceof \Illuminate\Http\Response) {
@@ -375,7 +379,7 @@ public function reviewCarer(Request $request, $id)
         return response(['Validation errors' => $validator->errors()->all()], 422);
     }
 
-    $carer = Carer::find($id);
+    $carer = Carer::find($carerId);
     if (!$carer || (int) $carer->hospital_id !== (int) $hospital->id) {
         return response()->json(['message' => 'Forbidden'], 403);
     }
@@ -404,14 +408,14 @@ public function reviewCarer(Request $request, $id)
     return response(new CarerResource($carer), 200);
 }
 
-public function carerApprovalHistory(Request $request, $id)
+public function carerApprovalHistory(Request $request, $carerId)
 {
     $hospital = $this->requireHospitalUser();
     if ($hospital instanceof \Illuminate\Http\Response) {
         return $hospital;
     }
 
-    $carer = Carer::find($id);
+    $carer = Carer::find($carerId);
     if (!$carer || (int) $carer->hospital_id !== (int) $hospital->id) {
         return response()->json(['message' => 'Forbidden'], 403);
     }
@@ -419,7 +423,7 @@ public function carerApprovalHistory(Request $request, $id)
     $perPage = (int) $request->query('per_page', 20);
     $page = (int) $request->query('page', 1);
 
-    $query = CarerApprovalLog::where('carer_id', $id)
+    $query = CarerApprovalLog::where('carer_id', $carerId)
         ->where('hospital_id', $hospital->id)
         ->orderBy('created_at', 'desc');
 

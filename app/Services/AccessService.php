@@ -103,7 +103,9 @@ class AccessService
         if (!$user) {
             return null;
         }
-        return Hospital::where('firedb_id', $user->firedb_id)->value('id');
+        return Hospital::where('user_id', $user->id)
+            ->orWhere('firedb_id', $user->firedb_id)
+            ->value('id');
     }
 
     public function canAccessPatient(int $patientId): bool

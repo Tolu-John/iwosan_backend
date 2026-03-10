@@ -27,6 +27,11 @@ class Hospital extends Model
         return $this->belongsTo(User::class, 'admin_id');
     }
 
+    public function user()
+    {
+        return $this->belongsTo(User::class, 'user_id');
+    }
+
     public function teletests()
     {
         return $this->hasMany(Teletest::class);
@@ -85,7 +90,8 @@ class Hospital extends Model
         'password',
         'address',
         'super_admin_approved',
-        'firedb_id'
+        'firedb_id',
+        'user_id',
     
     ];
 

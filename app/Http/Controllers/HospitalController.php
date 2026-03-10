@@ -52,6 +52,34 @@ class HospitalController extends Controller
         , 200);
     }
 
+    public function directory(Request $request)
+    {
+        $search = trim((string) $request->query('q', ''));
+        $limit = (int) $request->query('limit', 25);
+        if ($limit < 1) {
+            $limit = 25;
+        }
+        if ($limit > 100) {
+            $limit = 100;
+        }
+
+        $query = Hospital::query()
+            ->select(['id', 'name', 'code', 'email'])
+            ->orderBy('name');
+
+        if ($search !== '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', '%'.$search.'%')
+                    ->orWhere('code', 'like', '%'.$search.'%')
+                    ->orWhere('email', 'like', '%'.$search.'%');
+            });
+        }
+
+        return response()->json([
+            'data' => $query->limit($limit)->get(),
+        ], 200);
+    }
+
     /**
      * Show the form for creating a new resource.
      *
@@ -126,7 +154,27 @@ class HospitalController extends Controller
             return response(new HospitalProfileResource($hospital), 200);
         }
 
-        return response(new HospitalResource($hospital), 200);
+        if (request()->boolean('full')) {
+            return response(new HospitalResource($hospital), 200);
+        }
+
+        return response()->json([
+            'data' => $this->toLitePayload($hospital),
+        ], 200);
+    }
+
+    public function profileLite($id)
+    {
+        $hospital = Hospital::find($id);
+        if (is_null($hospital)) {
+            return response()->json(['message' => 'Hospital not found.'], 404);
+        }
+
+        $this->authorize('view', $hospital);
+
+        return response()->json([
+            'data' => $this->toLitePayload($hospital),
+        ], 200);
     }
 
     /**
@@ -160,7 +208,9 @@ class HospitalController extends Controller
 
         $hospital = $this->profiles->updateHospitalProfile($hospital, $data);
 
-        return response(new HospitalResource($hospital), 200);
+        return response()->json([
+            'data' => $this->toLitePayload($hospital),
+        ], 200);
 
     }
 
@@ -212,7 +262,35 @@ class HospitalController extends Controller
         $hospital->hospital_img = $this->images->buildPublicUrl('hospital', $filename);
         $hospital->save();
 
-        return response(new HospitalResource($hospital), 200);
+        return response()->json([
+            'data' => $this->toLitePayload($hospital),
+        ], 200);
+    }
+
+    private function toLitePayload(Hospital $hospital): array
+    {
+        return [
+            'id' => (string) $hospital->id,
+            'name' => $hospital->name,
+            'phone' => $hospital->phone,
+            'code' => $hospital->code,
+            'about_us' => $hospital->about_us,
+            'website' => $hospital->website,
+            'hospital_img' => $hospital->hospital_img,
+            'email' => $hospital->email,
+            'account_number' => $hospital->account_number,
+            'account_name' => $hospital->account_name,
+            'bank_name' => $hospital->bank_name,
+            'bank_code' => $hospital->bank_code,
+            'home_visit_price' => $hospital->home_visit_price,
+            'virtual_visit_price' => $hospital->virtual_visit_price,
+            'virtual_ward_price' => $hospital->virtual_ward_price,
+            'lat' => $hospital->lat,
+            'lon' => $hospital->lon,
+            'address' => $hospital->address,
+            'super_admin_approved' => (int) $hospital->super_admin_approved,
+            'updated_at' => optional($hospital->updated_at)->toISOString(),
+        ];
     }
 
     private function denyHospitalWrite(Hospital $hospital)

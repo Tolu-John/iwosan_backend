@@ -30,9 +30,23 @@ class StoreLabResultRequest extends FormRequest
             'lab_name' => 'required|string|max:255',
             'extra_notes' => 'nullable|string|max:5000',
             'source' => 'nullable|string|max:50',
-            'file' => 'required_without:files|file|mimes:pdf,jpg,jpeg,png|max:10240',
-            'files' => 'required_without:file|array|max:2',
-            'files.*' => 'file|mimes:pdf,jpg,jpeg,png|max:10240',
+            'file' => 'nullable|file|max:20480',
+            'files' => 'nullable|array|max:2',
+            'files.*' => 'file|max:20480',
+            'file_base64' => 'nullable|string',
+            'file_name' => 'nullable|string|max:255',
         ];
+    }
+
+    public function withValidator($validator): void
+    {
+        $validator->after(function ($validator) {
+            $hasSingle = $this->hasFile('file');
+            $hasMultiple = is_array($this->file('files')) && count(array_filter($this->file('files'))) > 0;
+            $hasBase64 = trim((string) $this->input('file_base64')) !== '';
+            if (!$hasSingle && !$hasMultiple && !$hasBase64) {
+                $validator->errors()->add('file', 'Attach at least one file.');
+            }
+        });
     }
 }

@@ -139,6 +139,7 @@ class ConsultationTest extends TestCase
             'patient_id' => $patient->id,
             'carer_id' => $carer->id,
             'hospital_id' => $hospital->id,
+            'payment_id' => null,
             'status' => 'pending_payment',
             'treatment_type' => 'Virtual visit',
         ]);
@@ -168,5 +169,144 @@ class ConsultationTest extends TestCase
         ];
 
         $this->putJson("/api/v1/consultation/{$consultation->id}", $payload)->assertStatus(422);
+    }
+
+    public function test_patient_can_create_virtual_consultation_draft(): void
+    {
+        $user = User::factory()->create();
+        $patient = Patient::factory()->create(['user_id' => $user->id]);
+        $hospital = Hospital::factory()->create();
+        $carer = Carer::factory()->create(['hospital_id' => $hospital->id]);
+        Passport::actingAs($user);
+
+        $payload = [
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'hospital_id' => $hospital->id,
+            'payment_id' => null,
+            'status' => 'draft',
+            'treatment_type' => 'Virtual visit',
+            'diagnosis' => 'Draft diagnosis',
+            'consult_notes' => 'Draft notes',
+            'date_time' => '2026-02-10 10:00:00',
+            'vConsultation' => [
+                'consult_type' => 'video',
+                'duration' => 25,
+            ],
+        ];
+
+        $this->postJson('/api/v1/consultation', $payload)
+            ->assertStatus(200)
+            ->assertJsonFragment(['status' => 'draft']);
+    }
+
+    public function test_virtual_consultation_rejects_hconsultation_payload(): void
+    {
+        $user = User::factory()->create();
+        $patient = Patient::factory()->create(['user_id' => $user->id]);
+        $hospital = Hospital::factory()->create();
+        $carer = Carer::factory()->create(['hospital_id' => $hospital->id]);
+        Passport::actingAs($user);
+
+        $payload = [
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'hospital_id' => $hospital->id,
+            'payment_id' => null,
+            'status' => 'draft',
+            'treatment_type' => 'Virtual visit',
+            'diagnosis' => 'Diagnosis',
+            'consult_notes' => 'Notes',
+            'date_time' => '2026-02-10 10:00:00',
+            'vConsultation' => [
+                'consult_type' => 'video',
+                'duration' => 20,
+            ],
+            'hConsultation' => [
+                'address' => 'Invalid for virtual',
+                'ward_id' => 1,
+                'admitted' => 0,
+            ],
+        ];
+
+        $this->postJson('/api/v1/consultation', $payload)
+            ->assertStatus(422);
+    }
+
+    public function test_cannot_transition_completed_consultation_back_to_draft(): void
+    {
+        $user = User::factory()->create();
+        $patient = Patient::factory()->create(['user_id' => $user->id]);
+        $hospital = Hospital::factory()->create();
+        $carer = Carer::factory()->create(['hospital_id' => $hospital->id]);
+        $payment = Payment::factory()->create([
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'status' => 'paid',
+        ]);
+
+        $consultation = Consultation::factory()->create([
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'hospital_id' => $hospital->id,
+            'payment_id' => $payment->id,
+            'status' => 'completed',
+            'treatment_type' => 'Virtual visit',
+        ]);
+
+        Passport::actingAs($user);
+
+        $payload = [
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'hospital_id' => $hospital->id,
+            'payment_id' => $payment->id,
+            'status' => 'draft',
+            'treatment_type' => 'Virtual visit',
+            'diagnosis' => 'Diagnosis',
+            'consult_notes' => 'Notes',
+            'date_time' => '2026-02-10 10:00:00',
+            'vConsultation' => [
+                'consult_type' => 'video',
+                'duration' => 20,
+            ],
+        ];
+
+        $this->putJson("/api/v1/consultation/{$consultation->id}", $payload)
+            ->assertStatus(422);
+    }
+
+    public function test_carer_can_create_consultation_draft_for_own_assignment(): void
+    {
+        $carerUser = User::factory()->create();
+        $patientUser = User::factory()->create();
+        $patient = Patient::factory()->create(['user_id' => $patientUser->id]);
+        $hospital = Hospital::factory()->create();
+        $carer = Carer::factory()->create([
+            'user_id' => $carerUser->id,
+            'hospital_id' => $hospital->id,
+        ]);
+
+        Passport::actingAs($carerUser);
+
+        $payload = [
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'hospital_id' => $hospital->id,
+            'payment_id' => null,
+            'status' => 'draft',
+            'treatment_type' => 'Virtual visit',
+            'diagnosis' => 'Draft by carer',
+            'consult_notes' => 'Draft notes by carer',
+            'date_time' => '2026-02-10 10:00:00',
+            'vConsultation' => [
+                'consult_type' => 'video',
+                'duration' => 20,
+            ],
+        ];
+
+        $this->postJson('/api/v1/consultation', $payload)
+            ->assertStatus(200)
+            ->assertJsonFragment(['status' => 'draft']);
     }
 }

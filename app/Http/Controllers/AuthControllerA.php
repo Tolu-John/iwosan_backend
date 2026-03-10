@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\Auth\LoginHospitalRequest;
 use App\Http\Requests\Auth\RegisterHospitalRequest;
+use App\Http\Requests\Auth\ChangePasswordRequest;
 use App\Services\AuthService;
 use Illuminate\Http\Request;
 
@@ -23,6 +24,7 @@ class AuthControllerA extends Controller
         return response()->json([
             'message' => 'Registered Successfully',
             'id' => $result['id'],
+            'code' => $result['code'] ?? null,
             'expires_at' => $result['expires_at'],
             'access_token' => $result['access_token'],
         ], 200);
@@ -54,5 +56,21 @@ class AuthControllerA extends Controller
         }
 
         return response(['message' => 'You have been successfully logged out!'], 200);
+    }
+
+    public function changePassword(ChangePasswordRequest $request)
+    {
+        try {
+            $this->auth->changePassword(
+                $request->user(),
+                $request->validated()['current_password'],
+                $request->validated()['password'],
+                'hospital'
+            );
+        } catch (\RuntimeException $e) {
+            return response(['message' => $e->getMessage()], 422);
+        }
+
+        return response(['message' => 'Password changed successfully.'], 200);
     }
 }

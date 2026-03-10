@@ -32,7 +32,7 @@ class UpdateHospitalProfileRequest extends FormRequest
             'account_number' => 'required|string|max:255',
             'account_name' => 'required|string|max:255',
             'bank_name' => 'required|string|max:255',
-            'bank_code' => 'required|string|max:50',
+            'bank_code' => 'nullable|string|max:50',
             'address' => 'required|string|max:255',
             'phone' => 'required|string|max:50',
             'lat' => 'required',

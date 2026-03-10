@@ -42,6 +42,8 @@ class Review extends Model
     ];
 
     protected $casts = [
+        'recomm' => 'boolean',
+        'tags' => 'array',
         'response_at' => 'datetime',
         'edited_at' => 'datetime',
     ];

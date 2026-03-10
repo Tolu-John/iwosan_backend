@@ -72,14 +72,14 @@ class CarerSearchService
         $lon = $filters['lon'] ?? null;
         if ($lat !== null && $lon !== null) {
             $query->selectRaw($this->distanceSql(), [$lat, $lon, $lat])
-                ->addSelect(['carers.*', 'users.firstname', 'users.lastname', 'users.gender', 'users.phone', 'users.email', 'users.lat as user_lat', 'users.lon as user_lon'])
+                ->addSelect(['carers.*', 'users.firstname', 'users.lastname', 'users.gender', 'users.phone', 'users.email', 'users.user_img', 'users.lat as user_lat', 'users.lon as user_lon'])
                 ->addSelect(['hospitals.name as hospital_name', 'hospitals.home_visit_price', 'hospitals.virtual_visit_price', 'hospitals.lat as hospital_lat', 'hospitals.lon as hospital_lon']);
 
             if (!empty($filters['max_distance_km'])) {
                 $query->having('distance_km', '<=', (float) $filters['max_distance_km']);
             }
         } else {
-            $query->addSelect(['carers.*', 'users.firstname', 'users.lastname', 'users.gender', 'users.phone', 'users.email', 'users.lat as user_lat', 'users.lon as user_lon'])
+            $query->addSelect(['carers.*', 'users.firstname', 'users.lastname', 'users.gender', 'users.phone', 'users.email', 'users.user_img', 'users.lat as user_lat', 'users.lon as user_lon'])
                 ->addSelect(['hospitals.name as hospital_name', 'hospitals.home_visit_price', 'hospitals.virtual_visit_price', 'hospitals.lat as hospital_lat', 'hospitals.lon as hospital_lon']);
         }
 
@@ -105,6 +105,7 @@ class CarerSearchService
                 'user' => [
                     'firstname' => $row->firstname,
                     'lastname' => $row->lastname,
+                    'user_img' => $row->user_img,
                     'gender' => $row->gender,
                     'phone' => $row->phone,
                     'email' => $row->email,
@@ -124,6 +125,8 @@ class CarerSearchService
                 'verified' => (bool) ($row->admin_approved && $row->super_admin_approved),
                 'certifications_count' => (int) $row->certifications_count,
                 'review_count' => (int) $row->review_count,
+                'avatar' => $row->user_img,
+                'carer_image_url' => $row->user_img,
                 'distance_km' => isset($row->distance_km) ? (float) $row->distance_km : null,
                 'price' => $visitType === 'home' ? $row->home_visit_price : $row->virtual_visit_price,
                 'next_available' => $visitType === 'home' ? $row->home_day_time : $row->virtual_day_time,

@@ -11,12 +11,30 @@ use Illuminate\Support\Facades\DB;
 class AppointmentService
 {
     private const STATUS_DESCRIPTIONS = [
+        'requested' => 'Request submitted',
+        'triage' => 'Awaiting triage',
+        'insurance_pending' => 'Insurance review pending',
+        'insurance_approved' => 'Insurance approved',
+        'insurance_rejected' => 'Insurance rejected',
         'pending_payment' => 'Awaiting payment',
         'scheduled' => 'Scheduled',
         'in_progress' => 'In progress',
         'completed' => 'Completed',
         'cancelled' => 'Cancelled',
         'no_show' => 'No show',
+    ];
+    private const TRANSITIONS = [
+        'requested' => ['triage', 'insurance_pending', 'pending_payment', 'scheduled', 'cancelled'],
+        'triage' => ['insurance_pending', 'pending_payment', 'scheduled', 'cancelled'],
+        'insurance_pending' => ['insurance_approved', 'insurance_rejected', 'cancelled'],
+        'insurance_approved' => ['pending_payment', 'scheduled', 'cancelled'],
+        'insurance_rejected' => ['pending_payment', 'cancelled'],
+        'pending_payment' => ['scheduled', 'cancelled'],
+        'scheduled' => ['in_progress', 'completed', 'cancelled', 'no_show'],
+        'in_progress' => ['completed', 'cancelled'],
+        'completed' => [],
+        'cancelled' => [],
+        'no_show' => [],
     ];
 
     private StatusChangeService $statusChanges;
@@ -48,14 +66,20 @@ class AppointmentService
             }
         }
 
+        $data['status'] = $this->normalizeStatus($data['status']);
+        if ($this->shouldAutoScheduleVirtualOnCreate($data)) {
+            $data['status'] = 'scheduled';
+            $data['status_reason'] = $data['status_reason'] ?? 'Auto-confirmed virtual visit';
+        }
         $paymentId = $data['payment_id'] ?? null;
-        $this->assertPaymentVerifiedForStatus($data['status'], $paymentId);
+        $this->assertPaymentVerifiedForStatus($data['status'], $paymentId, $data['appointment_type'] ?? null);
 
         return DB::transaction(function () use ($data, $currentHospitalId, $paymentId) {
             $appointment = new Appointment();
             $adminApproved = $currentHospitalId ? $data['admin_approved'] : 0;
             $this->fillAppointment($appointment, $data, true, $adminApproved);
             $this->applyStatusMetadata($appointment, null, $data['status']);
+            $this->applyWorkflowMetadata($appointment, null, $data['status'], $data);
             $appointment->save();
 
             $this->recordStatusChange($appointment, null, $data['status'], $data['status_reason'] ?? null);
@@ -92,8 +116,9 @@ class AppointmentService
             abort(403, 'Forbidden');
         }
 
-        $fromStatus = $appointment->status;
-        $nextStatus = $data['status'];
+        $fromStatus = $this->normalizeStatus((string) $appointment->status);
+        $nextStatus = $this->normalizeStatus((string) $data['status']);
+        $data['status'] = $nextStatus;
         $paymentId = $data['payment_id'] ?? $appointment->payment_id;
         $this->assertStatusTransitionAllowed($appointment, $fromStatus, $nextStatus, $paymentId, $access);
 
@@ -101,6 +126,7 @@ class AppointmentService
             $adminApproved = $currentHospitalId ? $data['admin_approved'] : $appointment->admin_approved;
             $this->fillAppointment($appointment, $data, false, $adminApproved);
             $this->applyStatusMetadata($appointment, $fromStatus, $nextStatus);
+            $this->applyWorkflowMetadata($appointment, $fromStatus, $nextStatus, $data);
             $appointment->save();
 
             $this->handlePaymentSideEffects($paymentId, $fromStatus, $nextStatus);
@@ -110,24 +136,92 @@ class AppointmentService
         });
     }
 
+    /**
+     * Auto-transition stale virtual scheduled appointments to no_show.
+     * This keeps timeout state server-authoritative for all clients.
+     */
+    public function enforceTimeouts(iterable $appointments): void
+    {
+        foreach ($appointments as $appointment) {
+            if ($appointment instanceof Appointment) {
+                $this->enforceTimeoutFor($appointment);
+            }
+        }
+    }
+
+    /**
+     * Auto-transition a single stale virtual scheduled appointment to no_show.
+     */
+    public function enforceTimeoutFor(Appointment $appointment): Appointment
+    {
+        $current = $this->normalizeStatus((string) $appointment->status);
+        if ($current !== 'scheduled') {
+            return $appointment;
+        }
+
+        if (!$this->isVirtualVisitType($appointment->appointment_type)) {
+            return $appointment;
+        }
+
+        $appointmentTime = $this->parseDateTime($appointment->date_time);
+        if (!$appointmentTime) {
+            return $appointment;
+        }
+
+        $graceMinutes = (int) env('APPOINTMENT_VIRTUAL_NO_SHOW_GRACE_MINUTES', 20);
+        $deadline = $appointmentTime->copy()->addMinutes(max($graceMinutes, 0));
+        if (Carbon::now()->lessThanOrEqualTo($deadline)) {
+            return $appointment;
+        }
+
+        DB::transaction(function () use ($appointment, $current) {
+            $next = 'no_show';
+            $this->applyStatusMetadata($appointment, $current, $next);
+            $this->applyWorkflowMetadata($appointment, $current, $next, [
+                'status_reason' => 'auto_virtual_session_timeout',
+            ]);
+            $appointment->status = $next;
+            $appointment->save();
+            $this->handlePaymentSideEffects($appointment->payment_id, $current, $next);
+
+            $this->recordStatusChange(
+                $appointment,
+                $current,
+                $next,
+                'auto_virtual_session_timeout'
+            );
+        });
+
+        return $appointment->refresh();
+    }
+
     private function fillAppointment(Appointment $appointment, array $data, bool $isCreate, $adminApproved): void
     {
         $appointment->patient_id = $data['patient_id'];
         $appointment->carer_id = $data['carer_id'];
         $appointment->status = $data['status'];
         $appointment->address = $data['address'];
+        $appointment->address_lat = $data['address_lat'] ?? null;
+        $appointment->address_lon = $data['address_lon'] ?? null;
         $appointment->price = $data['price'];
         $appointment->payment_id = $data['payment_id'] ?? null;
         $appointment->consult_id = $data['consult_id'] ?? null;
         $appointment->consult_type = $data['consult_type'];
         $appointment->extra_notes = $data['extra_notes'];
+        $appointment->consent_accepted = (bool) ($data['consent_accepted'] ?? false);
+        $appointment->attachments_json = $data['attachments_json'] ?? $appointment->attachments_json;
         $appointment->appointment_type = $data['appointment_type'];
         $appointment->channel = $data['channel'] ?? null;
         $appointment->date_time = $data['date_time'];
+        $appointment->owned_by_role = $data['owned_by_role'] ?? $appointment->owned_by_role;
+        $appointment->owned_by_id = $data['owned_by_id'] ?? $appointment->owned_by_id;
+        $appointment->next_action_at = $data['next_action_at'] ?? $appointment->next_action_at;
         if ($isCreate) {
             $appointment->admin_approved = $adminApproved;
         } else {
-            $appointment->ward_id = $data['ward_id'];
+            if (array_key_exists('ward_id', $data)) {
+                $appointment->ward_id = $data['ward_id'];
+            }
             $appointment->admin_approved = $adminApproved;
         }
     }
@@ -174,8 +268,18 @@ class AppointmentService
             return;
         }
 
+        $allowed = self::TRANSITIONS[$fromStatus] ?? [];
+        if (!in_array($toStatus, $allowed, true)) {
+            abort(422, "Invalid appointment status transition: {$fromStatus} -> {$toStatus}.");
+        }
+
         if (in_array($toStatus, ['scheduled', 'in_progress', 'completed'], true)) {
-            $this->assertPaymentVerifiedForStatus($toStatus, $paymentId);
+            $this->assertFinancialClearanceForStatus(
+                $fromStatus,
+                $toStatus,
+                $paymentId,
+                $appointment->appointment_type
+            );
         }
 
         if ($toStatus === 'cancelled') {
@@ -187,9 +291,14 @@ class AppointmentService
         }
     }
 
-    private function assertPaymentVerifiedForStatus(string $status, ?int $paymentId): void
+    private function assertPaymentVerifiedForStatus(string $status, ?int $paymentId, ?string $appointmentType = null): void
     {
         if (!in_array($status, ['scheduled', 'in_progress', 'completed'], true)) {
+            return;
+        }
+
+        if ($this->isVirtualVisitType($appointmentType)) {
+            // Virtual visits are auto-confirmed in this workflow.
             return;
         }
 
@@ -203,10 +312,28 @@ class AppointmentService
         }
     }
 
+    private function assertFinancialClearanceForStatus(
+        string $fromStatus,
+        string $toStatus,
+        ?int $paymentId,
+        ?string $appointmentType = null
+    ): void
+    {
+        if (!in_array($toStatus, ['scheduled', 'in_progress', 'completed'], true)) {
+            return;
+        }
+
+        if ($fromStatus === 'insurance_approved') {
+            return;
+        }
+
+        $this->assertPaymentVerifiedForStatus($toStatus, $paymentId, $appointmentType);
+    }
+
     private function assertCanCancel(Appointment $appointment, string $fromStatus, AccessService $access): void
     {
-        if (!in_array($fromStatus, ['pending_payment', 'scheduled'], true)) {
-            abort(422, 'Only pending or scheduled appointments can be cancelled.');
+        if (!in_array($fromStatus, ['pending_payment', 'scheduled', 'in_progress'], true)) {
+            abort(422, 'Only pending, scheduled, or in-progress appointments can be cancelled.');
         }
 
         $now = Carbon::now();
@@ -253,13 +380,16 @@ class AppointmentService
             return;
         }
 
-        if ($toStatus !== 'cancelled' || !$paymentId) {
+        if (!in_array($toStatus, ['cancelled', 'no_show'], true) || !$paymentId) {
             return;
         }
 
         $payment = Payment::find($paymentId);
         if ($payment && $payment->status === 'paid') {
             $payment->status = 'refund_pending';
+            $payment->status_reason = $toStatus === 'no_show'
+                ? 'appointment_no_show_auto_refund_review'
+                : 'appointment_cancelled_refund_review';
             $payment->save();
         }
     }
@@ -308,5 +438,78 @@ class AppointmentService
         } catch (\Throwable $e) {
             return null;
         }
+    }
+
+    private function normalizeStatus(string $status): string
+    {
+        $normalized = trim(strtolower($status));
+        return match ($normalized) {
+            'pending', 'payment_pending' => 'pending_payment',
+            default => $normalized,
+        };
+    }
+
+    private function applyWorkflowMetadata(Appointment $appointment, ?string $fromStatus, string $toStatus, array $data): void
+    {
+        if (array_key_exists('owned_by_role', $data)) {
+            $appointment->owned_by_role = $data['owned_by_role'] ?: null;
+        }
+        if (array_key_exists('owned_by_id', $data)) {
+            $appointment->owned_by_id = $data['owned_by_id'] ? (int) $data['owned_by_id'] : null;
+        }
+        if (array_key_exists('next_action_at', $data)) {
+            $appointment->next_action_at = $data['next_action_at'] ? Carbon::parse((string) $data['next_action_at']) : null;
+        }
+
+        if ($fromStatus === $toStatus) {
+            return;
+        }
+
+        // Default queue ownership by workflow stage if caller did not explicitly set owner.
+        if (!$appointment->owned_by_role) {
+            if (in_array($toStatus, ['requested', 'triage', 'insurance_pending', 'insurance_approved', 'insurance_rejected', 'pending_payment'], true)) {
+                $hospitalId = optional($appointment->carer)->hospital_id;
+                if ($hospitalId) {
+                    $appointment->owned_by_role = 'hospital';
+                    $appointment->owned_by_id = (int) $hospitalId;
+                } else {
+                    $appointment->owned_by_role = 'ops';
+                    $appointment->owned_by_id = null;
+                }
+            } elseif (in_array($toStatus, ['scheduled', 'in_progress'], true)) {
+                $appointment->owned_by_role = 'carer';
+                $appointment->owned_by_id = (int) $appointment->carer_id;
+            } else {
+                $appointment->owned_by_role = null;
+                $appointment->owned_by_id = null;
+            }
+        }
+
+        if (!$appointment->next_action_at) {
+            $appointment->next_action_at = match ($toStatus) {
+                'requested' => Carbon::now()->addMinutes(30),
+                'triage' => Carbon::now()->addMinutes(20),
+                'insurance_pending' => Carbon::now()->addHours(4),
+                'insurance_approved', 'insurance_rejected' => Carbon::now()->addHours(2),
+                'pending_payment' => Carbon::now()->addHours(6),
+                default => null,
+            };
+        }
+    }
+
+    private function isVirtualVisitType(?string $appointmentType): bool
+    {
+        $type = strtolower(trim((string) $appointmentType));
+        return str_contains($type, 'virtual');
+    }
+
+    private function shouldAutoScheduleVirtualOnCreate(array $data): bool
+    {
+        if (!$this->isVirtualVisitType($data['appointment_type'] ?? null)) {
+            return false;
+        }
+
+        $status = $this->normalizeStatus((string) ($data['status'] ?? 'pending'));
+        return in_array($status, ['requested', 'triage', 'pending_payment'], true);
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\UpdatePatientProfileRequest;
+use App\Http\Requests\UpdatePatientSettingsRequest;
 use App\Http\Requests\UploadPatientImageRequest;
 use App\Http\Resources\PatientLiteResource;
 use App\Http\Resources\PatientResource;
@@ -199,6 +200,102 @@ class PatientController extends Controller
         return response( new PatientResource($patient)
         , 200);
 
+    }
+
+    public function settings(Patient $patient)
+    {
+        $currentPatientId = $this->access->currentPatientId();
+        if (!$currentPatientId || (int) $patient->id !== (int) $currentPatientId) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        return response([
+            'push_notifications_enabled' => (bool) $patient->push_notifications_enabled,
+            'sms_alerts_enabled' => (bool) $patient->sms_alerts_enabled,
+            'share_vitals_with_carers' => (bool) $patient->share_vitals_with_carers,
+        ], 200);
+    }
+
+    public function mySettings()
+    {
+        $currentPatientId = $this->access->currentPatientId();
+        if (!$currentPatientId) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $patient = Patient::find($currentPatientId);
+        if (!$patient) {
+            return response()->json(['message' => 'Patient not found.'], 404);
+        }
+
+        return response([
+            'push_notifications_enabled' => (bool) $patient->push_notifications_enabled,
+            'sms_alerts_enabled' => (bool) $patient->sms_alerts_enabled,
+            'share_vitals_with_carers' => (bool) $patient->share_vitals_with_carers,
+        ], 200);
+    }
+
+    public function updateSettings(UpdatePatientSettingsRequest $request, Patient $patient)
+    {
+        $currentPatientId = $this->access->currentPatientId();
+        if (!$currentPatientId || (int) $patient->id !== (int) $currentPatientId) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $data = $request->validated();
+        if (array_key_exists('push_notifications_enabled', $data)) {
+            $patient->push_notifications_enabled = (bool) $data['push_notifications_enabled'];
+        }
+        if (array_key_exists('sms_alerts_enabled', $data)) {
+            $patient->sms_alerts_enabled = (bool) $data['sms_alerts_enabled'];
+        }
+        if (array_key_exists('share_vitals_with_carers', $data)) {
+            $patient->share_vitals_with_carers = (bool) $data['share_vitals_with_carers'];
+        }
+        $patient->save();
+
+        return response([
+            'message' => 'Patient settings updated.',
+            'data' => [
+                'push_notifications_enabled' => (bool) $patient->push_notifications_enabled,
+                'sms_alerts_enabled' => (bool) $patient->sms_alerts_enabled,
+                'share_vitals_with_carers' => (bool) $patient->share_vitals_with_carers,
+            ],
+        ], 200);
+    }
+
+    public function updateMySettings(UpdatePatientSettingsRequest $request)
+    {
+        $currentPatientId = $this->access->currentPatientId();
+        if (!$currentPatientId) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $patient = Patient::find($currentPatientId);
+        if (!$patient) {
+            return response()->json(['message' => 'Patient not found.'], 404);
+        }
+
+        $data = $request->validated();
+        if (array_key_exists('push_notifications_enabled', $data)) {
+            $patient->push_notifications_enabled = (bool) $data['push_notifications_enabled'];
+        }
+        if (array_key_exists('sms_alerts_enabled', $data)) {
+            $patient->sms_alerts_enabled = (bool) $data['sms_alerts_enabled'];
+        }
+        if (array_key_exists('share_vitals_with_carers', $data)) {
+            $patient->share_vitals_with_carers = (bool) $data['share_vitals_with_carers'];
+        }
+        $patient->save();
+
+        return response([
+            'message' => 'Patient settings updated.',
+            'data' => [
+                'push_notifications_enabled' => (bool) $patient->push_notifications_enabled,
+                'sms_alerts_enabled' => (bool) $patient->sms_alerts_enabled,
+                'share_vitals_with_carers' => (bool) $patient->share_vitals_with_carers,
+            ],
+        ], 200);
     }
 
     /**

@@ -73,6 +73,12 @@ class CarerProfileResource extends JsonResource
         }
 
         $nextAvailable = $this->resolveNextAvailableSlot();
+        $latestReviews = Review::where('carer_id', $this->id)
+            ->where('status', 'published')
+            ->with(['patient', 'consultation'])
+            ->orderByDesc('updated_at')
+            ->limit(3)
+            ->get();
 
         return [
             'id' => (string) $this->id,
@@ -98,6 +104,11 @@ class CarerProfileResource extends JsonResource
             'distance_km' => $distanceKm,
             'call_address' => $this->call_address,
             'qualifications' => $this->qualifications,
+            'primary_qualification' => $this->primary_qualification,
+            'specialties' => $this->specialties ?? [],
+            'license_number' => $this->license_number,
+            'issuing_body' => $this->issuing_body,
+            'years_experience' => $this->years_experience,
             'availability' => [
                 'supports_home' => $this->home_day_time !== null,
                 'supports_virtual' => $this->virtual_day_time !== null,
@@ -120,6 +131,7 @@ class CarerProfileResource extends JsonResource
                 'no_show_rate_pct' => $noShowRate,
                 'response_time_minutes' => $this->response_time_minutes,
             ],
+            'latest_reviews' => ReviewResource::collection($latestReviews),
             'service_radius_km' => $this->service_radius_km,
             'verified' => (bool) ($this->admin_approved && $this->super_admin_approved),
             'created_at' => $this->created_at,

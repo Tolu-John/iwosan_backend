@@ -10,6 +10,7 @@ use App\Services\AccessService;
 use App\Services\PaymentService;
 use App\Services\RefundPolicyService;
 use Carbon\Carbon;
+use Symfony\Component\HttpFoundation\Response as HttpResponse;
 
 class PaymentProcessorController extends Controller
 {
@@ -57,7 +58,7 @@ public function create_transfer_recipient(Request $request){
     
     $result = $this->paystack->request('post', 'transferrecipient', $fields);
 
-    if ($result instanceof \Illuminate\Http\Response) {
+    if ($result instanceof HttpResponse) {
         return $result;
     }
 
@@ -88,7 +89,7 @@ public function resolve_account_details(Request $request){
     $endpoint = "bank/resolve?account_number=".$data['account_number']."&bank_code=".$data['bank_code'];
     $result = $this->paystack->request('get', $endpoint);
 
-    if ($result instanceof \Illuminate\Http\Response) {
+    if ($result instanceof HttpResponse) {
         return $result;
     }
 
@@ -125,7 +126,7 @@ public function update_transfer_recipient(Request $request){
     $endpoint = "transferrecipient/".$data['recipient_code'];
     $result = $this->paystack->request('put', $endpoint, $fields);
 
-    if ($result instanceof \Illuminate\Http\Response) {
+    if ($result instanceof HttpResponse) {
         return $result;
     }
 
@@ -154,7 +155,7 @@ public function delete_transfer_recipient(Request $request){
     $endpoint = "transferrecipient/".$data['recipient_code'];
     $result = $this->paystack->request('delete', $endpoint);
 
-    if ($result instanceof \Illuminate\Http\Response) {
+    if ($result instanceof HttpResponse) {
         return $result;
     }
 
@@ -172,7 +173,8 @@ public function initialize_payment(Request $request)
         'email' => 'required|email',
         'payment_id' => 'nullable|integer',
         'reference' => 'nullable|string|max:255',
-        'callback_url' => 'nullable|url',
+        // Mobile deep-link callbacks (e.g. iwosan://payments/callback) are valid here.
+        'callback_url' => 'nullable|string|max:2048',
         'currency' => 'nullable|string|max:10',
         'metadata' => 'nullable|array',
         'channels' => 'nullable|array',
@@ -194,7 +196,7 @@ public function initialize_payment(Request $request)
 
     $result = $this->paystack->request('post', 'transaction/initialize', array_filter($fields, fn($v) => $v !== null));
 
-    if ($result instanceof \Illuminate\Http\Response) {
+    if ($result instanceof HttpResponse) {
         return $result;
     }
 
@@ -252,7 +254,7 @@ public function verify_payment(Request $request)
     $endpoint = 'transaction/verify/' . $reference;
     $result = $this->paystack->request('get', $endpoint);
 
-    if ($result instanceof \Illuminate\Http\Response) {
+    if ($result instanceof HttpResponse) {
         return $result;
     }
 
@@ -345,7 +347,7 @@ public function initiate_transfer(Request $request){
       ];
     $result = $this->paystack->request('post', 'transfer', $fields);
 
-    if ($result instanceof \Illuminate\Http\Response) {
+    if ($result instanceof HttpResponse) {
         return $result;
     }
 
@@ -381,7 +383,7 @@ public function finalize_transfer(Request $request){
     ];
     $result = $this->paystack->request('post', 'transfer/finalize_transfer', $fields);
 
-    if ($result instanceof \Illuminate\Http\Response) {
+    if ($result instanceof HttpResponse) {
         return $result;
     }
 
@@ -411,7 +413,7 @@ public function verify_transfer(Request $request){
     $endpoint = "transfer/verify/".$data['reference'];
     $result = $this->paystack->request('get', $endpoint);
 
-    if ($result instanceof \Illuminate\Http\Response) {
+    if ($result instanceof HttpResponse) {
         return $result;
     }
 
@@ -461,7 +463,7 @@ public function create_refund(Request $request){
   ];
   $result = $this->paystack->request('post', 'refund', $fields);
 
-  if ($result instanceof \Illuminate\Http\Response) {
+  if ($result instanceof HttpResponse) {
       return $result;
   }
 
@@ -502,7 +504,7 @@ public function fetch_refund(Request $request){
     $endpoint = "refund/".$data['reference'];
     $result = $this->paystack->request('get', $endpoint);
 
-    if ($result instanceof \Illuminate\Http\Response) {
+    if ($result instanceof HttpResponse) {
         return $result;
     }
 

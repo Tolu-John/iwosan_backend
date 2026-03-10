@@ -3,6 +3,7 @@
 namespace App\Http\Requests\GenVitals;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class UpdateGenVitalRequest extends FormRequest
 {
@@ -29,16 +30,16 @@ class UpdateGenVitalRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'patient_id' => 'required|integer',
+            'patient_id' => 'required|integer|exists:patients,id',
             'type' => 'required|string|in:temperature,heart_rate,respiratory_rate,blood_pressure,oxygen_saturation,blood_glucose,weight,height,bmi,pain_score',
             'unit' => 'required|string|max:20',
-            'value' => 'nullable|numeric',
-            'systolic' => 'required_if:type,blood_pressure|numeric',
-            'diastolic' => 'required_if:type,blood_pressure|numeric',
+            'value' => ['nullable', 'numeric', Rule::requiredIf(fn () => $this->input('type') !== 'blood_pressure')],
+            'systolic' => 'nullable|required_if:type,blood_pressure|numeric',
+            'diastolic' => 'nullable|required_if:type,blood_pressure|numeric',
             'pulse' => 'nullable|numeric',
             'taken_at' => 'required|date',
             'context' => 'required|string|in:resting,post_exercise,post_meal,fasting,pre_med,post_med,sleep,unknown',
-            'source' => 'required|string|in:patient_manual,device_sync,clinic',
+            'source' => 'required|string|in:patient_manual,caregiver_manual,device_sync,clinic',
             'device_name' => 'nullable|string|max:100',
             'device_model' => 'nullable|string|max:100',
             'device_serial' => 'nullable|string|max:100',

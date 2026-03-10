@@ -27,7 +27,7 @@ class User extends Authenticatable
 
     public function hospital()
     {
-        return $this->hasOne(Hospital::class, 'admin_id');
+        return $this->hasOne(Hospital::class, 'user_id');
     }
 
 

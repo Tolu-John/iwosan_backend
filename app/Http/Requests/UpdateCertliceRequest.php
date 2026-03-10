@@ -39,7 +39,7 @@ class UpdateCertliceRequest extends FormRequest
             'expires_at' => 'nullable|date|after_or_equal:issued_at',
             'notes' => 'nullable|string',
             'file_name' => 'required|string|max:255',
-            'file' => 'nullable|mimes:jpeg,png,pdf',
+            'file' => 'nullable|file|max:10240|mimes:jpeg,jpg,png,pdf,heic,heif,webp',
         ];
     }
 }

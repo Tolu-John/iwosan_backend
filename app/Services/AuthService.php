@@ -75,7 +75,9 @@ class AuthService
 
         return DB::transaction(function () use ($data, $hospital) {
             $user = new User();
-            $user->firedb_id = $data['firedb_id'];
+            $user->firedb_id = !empty($data['firedb_id'])
+                ? $data['firedb_id']
+                : $this->generateFiredbId('carer');
             $user->firstname = $data['firstname'];
             $user->lastname = $data['lastname'];
             $user->email = $data['email'];
@@ -131,6 +133,7 @@ class AuthService
     public function registerHospital(array $data): array
     {
         return DB::transaction(function () use ($data) {
+            $hospitalCode = $this->generateHospitalCode();
             $user = new User();
             $user->firedb_id = $data['firedb_id'];
             $user->firstname = $data['name'];
@@ -147,7 +150,9 @@ class AuthService
             $hospital->firedb_id = $data['firedb_id'];
             $hospital->phone = $data['phone'];
             $hospital->password = $user->password;
-            $hospital->code = $data['code'];
+            $hospital->code = $hospitalCode;
+            $hospital->user_id = $user->id;
+            $hospital->admin_id = $user->id;
             $hospital->save();
 
             $token = $user->createToken(self::DEFAULT_TOKEN_NAME)->accessToken;
@@ -155,6 +160,7 @@ class AuthService
 
             return [
                 'id' => $hospital->id,
+                'code' => $hospital->code,
                 'access_token' => $token,
                 'expires_at' => $expiresAt,
             ];
@@ -172,7 +178,20 @@ class AuthService
             throw new \RuntimeException(self::INVALID_CREDENTIALS_MESSAGE);
         }
 
-        $user = User::where('firedb_id', $hospital->firedb_id)->first();
+        $user = null;
+        if (!empty($hospital->user_id)) {
+            $user = User::find($hospital->user_id);
+        }
+        if (!$user) {
+            $user = User::where('firedb_id', $hospital->firedb_id)->first();
+            if ($user) {
+                $hospital->user_id = $user->id;
+                if (empty($hospital->admin_id)) {
+                    $hospital->admin_id = $user->id;
+                }
+                $hospital->save();
+            }
+        }
         if (!$user) {
             throw new \RuntimeException(self::INVALID_CREDENTIALS_MESSAGE);
         }
@@ -200,6 +219,32 @@ class AuthService
         }
     }
 
+    public function changePassword(?User $user, string $currentPassword, string $newPassword, string $role): void
+    {
+        if (!$user) {
+            throw new \RuntimeException('Unauthorized');
+        }
+
+        if (!Hash::check($currentPassword, $user->password)) {
+            throw new \RuntimeException('Current password is incorrect.');
+        }
+
+        $hash = Hash::make($newPassword);
+        $user->password = $hash;
+        $user->save();
+
+        if ($role === 'hospital') {
+            $hospital = Hospital::where('user_id', $user->id)->first();
+            if (!$hospital && !empty($user->firedb_id)) {
+                $hospital = Hospital::where('firedb_id', $user->firedb_id)->first();
+            }
+            if ($hospital) {
+                $hospital->password = $hash;
+                $hospital->save();
+            }
+        }
+    }
+
     private function tokenExpiresAt(int $userId)
     {
         $row = DB::table('oauth_access_tokens')
@@ -208,5 +253,23 @@ class AuthService
             ->first();
 
         return $row->expires_at ?? null;
+    }
+
+    private function generateHospitalCode(): string
+    {
+        do {
+            $code = 'HSP'.strtoupper(Str::random(6));
+        } while (Hospital::where('code', $code)->exists());
+
+        return $code;
+    }
+
+    private function generateFiredbId(string $prefix): string
+    {
+        do {
+            $candidate = strtolower($prefix).'-'.Str::upper(Str::random(10));
+        } while (User::where('firedb_id', $candidate)->exists());
+
+        return $candidate;
     }
 }

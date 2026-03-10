@@ -18,7 +18,7 @@ class RegisterCarerRequest extends FormRequest
             'phone' => trim((string) $this->input('phone')),
             'firstname' => trim((string) $this->input('firstname')),
             'lastname' => trim((string) $this->input('lastname')),
-            'firedb_id' => trim((string) $this->input('firedb_id')),
+            'firedb_id' => trim((string) $this->input('firedb_id', '')),
             'code' => trim((string) $this->input('code')),
         ]);
     }
@@ -29,7 +29,7 @@ class RegisterCarerRequest extends FormRequest
             'firstname' => 'required|string|max:255',
             'lastname' => 'required|string|max:255',
             'phone' => 'required|string|max:50',
-            'firedb_id' => 'required|string|max:255',
+            'firedb_id' => 'nullable|string|max:255',
             'email' => 'required|email|max:255|unique:users',
             'password' => 'required|string|min:8|max:255',
             'code' => 'required|string|max:255',

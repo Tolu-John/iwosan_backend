@@ -3,16 +3,19 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\UpdateCarerProfileRequest;
+use App\Http\Requests\UpdateCarerAppointmentSettingsRequest;
 use App\Http\Requests\UploadCarerImageRequest;
 use App\Http\Resources\CarerLiteResource;
 use App\Http\Resources\CarerProfileResource;
 use App\Http\Resources\CarerResource;
+use App\Models\CarerApprovalLog;
 use App\Models\Carer;
 use App\Models\Hospital;
 use App\Models\User;
 use App\Services\AccessService;
 use App\Services\ProfileImageService;
 use App\Services\ProfileService;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Response;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
@@ -125,7 +128,13 @@ class CarerController extends Controller
         'onHome_leave' => 'required',
         'onVirtual_leave' => 'required',
         'code'=>'required',
-        'qualifications' => 'required',
+        'qualifications' => 'nullable|string',
+        'primary_qualification' => 'nullable|string|max:255',
+        'specialties' => 'nullable|array',
+        'specialties.*' => 'string|max:100',
+        'license_number' => 'nullable|string|max:255',
+        'issuing_body' => 'nullable|string|max:255',
+        'years_experience' => 'nullable|integer|min:0|max:80',
         'virtual_day_time' => 'required',
         'home_day_time' => 'required',
         'super_admin_approved'=>'required',
@@ -184,7 +193,12 @@ class CarerController extends Controller
             $carer->super_admin_approved=$data['super_admin_approved'];
             $carer->virtual_day_time=$data['virtual_day_time'];
             $carer->home_day_time=$data['home_day_time'];
-            $carer->qualifications=$data['qualifications'];
+            $carer->qualifications = $data['qualifications'] ?? null;
+            $carer->primary_qualification = $data['primary_qualification'] ?? null;
+            $carer->specialties = $data['specialties'] ?? null;
+            $carer->license_number = $data['license_number'] ?? null;
+            $carer->issuing_body = $data['issuing_body'] ?? null;
+            $carer->years_experience = $data['years_experience'] ?? null;
         
          
             $carer->save();
@@ -284,6 +298,119 @@ class CarerController extends Controller
         
                 return response(new CarerLiteResource($carer_), 200);
 
+    }
+
+    public function appointmentSettings(Carer $carer)
+    {
+        $currentCarerId = $this->access->currentCarerId();
+        if ($currentCarerId && (int) $carer->id !== (int) $currentCarerId) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $this->authorize('view', $carer);
+
+        return response()->json([
+            'id' => (int) $carer->id,
+            'onHome_leave' => (int) $carer->onHome_leave,
+            'onVirtual_leave' => (int) $carer->onVirtual_leave,
+            'virtual_day_time' => $carer->virtual_day_time,
+            'home_day_time' => $carer->home_day_time,
+            'service_radius_km' => $carer->service_radius_km,
+            'response_time_minutes' => $carer->response_time_minutes,
+        ], 200);
+    }
+
+    public function updateAppointmentSettings(UpdateCarerAppointmentSettingsRequest $request, Carer $carer)
+    {
+        $currentCarerId = $this->access->currentCarerId();
+        if (!$currentCarerId || (int) $carer->id !== (int) $currentCarerId) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $this->authorize('update', $carer);
+
+        $data = $request->validated();
+
+        if (array_key_exists('onHome_leave', $data) && !is_null($data['onHome_leave'])) {
+            $carer->onHome_leave = $data['onHome_leave'];
+        }
+        if (array_key_exists('onVirtual_leave', $data) && !is_null($data['onVirtual_leave'])) {
+            $carer->onVirtual_leave = $data['onVirtual_leave'];
+        }
+        if (array_key_exists('virtual_day_time', $data) && !is_null($data['virtual_day_time'])) {
+            $carer->virtual_day_time = $data['virtual_day_time'];
+        }
+        if (array_key_exists('home_day_time', $data) && !is_null($data['home_day_time'])) {
+            $carer->home_day_time = $data['home_day_time'];
+        }
+        if (array_key_exists('service_radius_km', $data) && !is_null($data['service_radius_km'])) {
+            $carer->service_radius_km = $data['service_radius_km'];
+        }
+        if (array_key_exists('response_time_minutes', $data) && !is_null($data['response_time_minutes'])) {
+            $carer->response_time_minutes = $data['response_time_minutes'];
+        }
+
+        $carer->save();
+
+        return response()->json([
+            'id' => (int) $carer->id,
+            'onHome_leave' => (int) $carer->onHome_leave,
+            'onVirtual_leave' => (int) $carer->onVirtual_leave,
+            'virtual_day_time' => $carer->virtual_day_time,
+            'home_day_time' => $carer->home_day_time,
+            'service_radius_km' => $carer->service_radius_km,
+            'response_time_minutes' => $carer->response_time_minutes,
+            'message' => 'Appointment settings updated',
+        ], 200);
+    }
+
+    public function reapplyApproval(Request $request)
+    {
+        $currentCarerId = $this->access->currentCarerId();
+        if (!$currentCarerId) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $carer = Carer::find($currentCarerId);
+        if (!$carer) {
+            return response()->json(['message' => 'Carer not found'], 404);
+        }
+
+        $isApproved = (int) $carer->admin_approved === 1 && (int) $carer->super_admin_approved === 1;
+        if ($isApproved) {
+            return response()->json(['message' => 'Carer is already approved.'], 422);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'reason' => 'nullable|string|max:255',
+        ]);
+        if ($validator->fails()) {
+            return response(['Validation errors' => $validator->errors()->all()], 422);
+        }
+
+        $data = $validator->validated();
+        $carer->admin_approved = 0;
+        $carer->super_admin_approved = 0;
+        $carer->last_reviewed_at = null;
+        $carer->save();
+
+        CarerApprovalLog::create([
+            'carer_id' => $carer->id,
+            'hospital_id' => $carer->hospital_id,
+            'status' => 'pending',
+            'reason' => $data['reason'] ?? 'reapply',
+            'reviewed_by' => Auth::id(),
+        ]);
+
+        return response()->json([
+            'message' => 'Reapplication submitted for hospital review.',
+            'data' => [
+                'id' => (int) $carer->id,
+                'approval_status' => 'pending',
+                'rejection_reason' => null,
+                'last_reviewed_at' => null,
+            ],
+        ], 200);
     }
 
     /**

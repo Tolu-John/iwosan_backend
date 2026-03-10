@@ -7,6 +7,7 @@ use App\Models\Patient;
 use App\Models\VitalAuditLog;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class GenVitalService
 {
@@ -29,18 +30,20 @@ class GenVitalService
             abort(403, 'Forbidden');
         }
 
-        $this->assertValidVital($data);
-        $this->assertNoDuplicate($data['patient_id'], $data['type'], $data['taken_at']);
+        return DB::transaction(function () use ($data, $access) {
+            $this->assertValidVital($data);
+            $this->assertNoDuplicate($data['patient_id'], $data['type'], $data['taken_at']);
 
-        $vital = new Gen_Vital();
-        $this->fillVital($vital, $data);
-        $vital->recorded_at = Carbon::now();
-        $vital->save();
+            $vital = new Gen_Vital();
+            $this->fillVital($vital, $data);
+            $vital->recorded_at = Carbon::now();
+            $vital->save();
 
-        $this->recordAudit($vital, 'created', $access);
-        $this->updatePatientSummary($data['patient_id'], $vital);
+            $this->recordAudit($vital, 'created', $access);
+            $this->updatePatientSummary($data['patient_id'], $vital);
 
-        return $vital;
+            return $vital;
+        });
     }
 
     public function update(Gen_Vital $vital, array $data, AccessService $access): Gen_Vital
@@ -54,15 +57,17 @@ class GenVitalService
             abort(403, 'Forbidden');
         }
 
-        $this->assertValidVital($data);
+        return DB::transaction(function () use ($vital, $data, $access) {
+            $this->assertValidVital($data);
 
-        $this->fillVital($vital, $data);
-        $vital->save();
+            $this->fillVital($vital, $data);
+            $vital->save();
 
-        $this->recordAudit($vital, 'updated', $access);
-        $this->updatePatientSummary($data['patient_id'], $vital);
+            $this->recordAudit($vital, 'updated', $access);
+            $this->updatePatientSummary($data['patient_id'], $vital);
 
-        return $vital;
+            return $vital;
+        });
     }
 
     public function delete(Gen_Vital $vital, AccessService $access): void
@@ -114,13 +119,14 @@ class GenVitalService
     {
         $type = $data['type'];
         $unit = $data['unit'];
+        $computedValue = $this->normalizeValue($data);
 
         $vital->patient_id = $data['patient_id'];
         $vital->name = $type;
         $vital->type = $type;
         $vital->unit = $unit;
-        $vital->value = $data['value'] ?? null;
-        $vital->value_num = isset($data['value']) ? (float) $data['value'] : null;
+        $vital->value = $computedValue;
+        $vital->value_num = is_numeric($computedValue) ? (float) $computedValue : null;
         $vital->systolic = $data['systolic'] ?? null;
         $vital->diastolic = $data['diastolic'] ?? null;
         $vital->pulse = $data['pulse'] ?? null;
@@ -179,6 +185,19 @@ class GenVitalService
         if ($sys < 60 || $sys > 250 || $dia < 30 || $dia > 150) {
             abort(422, 'Blood pressure out of allowed range.');
         }
+
+        if ($sys <= $dia) {
+            abort(422, 'Systolic must be greater than diastolic.');
+        }
+    }
+
+    private function normalizeValue(array $data): string
+    {
+        if ($data['type'] === 'blood_pressure') {
+            return sprintf('%s/%s', trim((string) $data['systolic']), trim((string) $data['diastolic']));
+        }
+
+        return trim((string) ($data['value'] ?? ''));
     }
 
     private function assertNoDuplicate(int $patientId, string $type, string $takenAt): void

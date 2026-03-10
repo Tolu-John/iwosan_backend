@@ -22,12 +22,15 @@ class VConsultationFactory extends Factory
      */
     public function definition()
     {
+        $consultationId = Consultation::query()->inRandomOrder()->value('id');
+        if (!$consultationId) {
+            $consultationId = Consultation::factory()->create()->id;
+        }
+
         return [
-            
-            'consultation_id'=>Consultation::all()->random(),
-            'consult_type'=>$this->faker->randomElement(['NOW','PRE_PLANNED']),
-            'duration'=>$this->faker->time($format='H:i:s'),
-        
+            'consultation_id' => $consultationId,
+            'consult_type' => $this->faker->randomElement(['NOW', 'PRE_PLANNED']),
+            'duration' => $this->faker->time($format = 'H:i:s'),
         ];
     }
 }

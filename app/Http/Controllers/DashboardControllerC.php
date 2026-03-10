@@ -166,6 +166,59 @@ class DashboardControllerC extends Controller
     
     }
 
+    public function carerPatients($id)
+    {
+        $auth = $this->requireCarerId($id);
+        if ($auth instanceof \Illuminate\Http\Response) {
+            return $auth;
+        }
+
+        $patientIds = collect($this->access->accessiblePatientIds())
+            ->filter(fn ($value) => !is_null($value))
+            ->map(fn ($value) => (int) $value)
+            ->unique()
+            ->values();
+
+        if ($patientIds->isEmpty()) {
+            return response(['data' => []], 200);
+        }
+
+        $patients = Patient::with('user')
+            ->whereIn('id', $patientIds->all())
+            ->orderByDesc('updated_at')
+            ->get();
+
+        $data = $patients->map(function ($patient) use ($id) {
+            $user = $patient->user;
+            $name = trim((string) (($user->firstname ?? '').' '.($user->lastname ?? '')));
+            if ($name === '') {
+                $name = 'Patient #'.$patient->id;
+            }
+
+            $latestAppointment = Appointment::where('carer_id', $id)
+                ->where('patient_id', $patient->id)
+                ->orderByDesc('updated_at')
+                ->first();
+
+            $status = strtolower((string) optional($latestAppointment)->status);
+            $isPriority = in_array($status, ['assigned', 'en_route', 'arrived', 'in_progress', 'home_admitted'], true);
+
+            return [
+                'id' => (int) $patient->id,
+                'name' => $name,
+                'phone' => $user->phone,
+                'risk' => $isPriority ? 'medium' : 'low',
+                'workflow_status' => $status !== '' ? $status : 'stable',
+                'next_action' => 'Record Vitals',
+                'due_text' => $latestAppointment && !empty($latestAppointment->date_time)
+                    ? 'Visit: '.$latestAppointment->date_time
+                    : 'No due time',
+            ];
+        })->values();
+
+        return response(['data' => $data], 200);
+    }
+
 
     public function showpaymentsbymypatients($id){
         $auth = $this->requireCarerId($id);

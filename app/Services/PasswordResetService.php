@@ -70,7 +70,13 @@ class PasswordResetService
         $user->update(['password' => $hash]);
 
         if ($type === 'hospital') {
-            $linkedUser = User::where('firedb_id', $user->firedb_id)->first();
+            $linkedUser = null;
+            if (!empty($user->user_id)) {
+                $linkedUser = User::find($user->user_id);
+            }
+            if (!$linkedUser) {
+                $linkedUser = User::where('firedb_id', $user->firedb_id)->first();
+            }
             if ($linkedUser) {
                 $linkedUser->update(['password' => $hash]);
             }

@@ -66,11 +66,19 @@ class TestController extends Controller
             'hospital_id' => 'required',
             'name' => 'required|string|max:255',
             'code' => 'nullable|string|max:100',
+            'test_code' => 'nullable|string|max:100',
+            'category' => 'nullable|string|max:255',
             'sample_type' => 'nullable|string|max:255',
             'turnaround_time' => 'nullable|string|max:255',
             'preparation_notes' => 'nullable|string',
+            'fasting_required' => 'nullable|boolean',
+            'description' => 'nullable|string',
             'extra_notes' => 'nullable|string',
             'price' => 'required|integer|min:0',
+            'cash_price' => 'nullable|integer|min:0',
+            'hmo_price' => 'nullable|integer|min:0',
+            'emergency_price' => 'nullable|integer|min:0',
+            'status' => 'nullable|in:published,draft,archived',
             'is_active' => 'nullable|boolean',
             'status_reason' => 'nullable|string|max:255',
         ]);
@@ -90,14 +98,24 @@ class TestController extends Controller
 
         $test->hospital_id=$data['hospital_id'];
         $test->name=$data['name'];
-        $test->code=$data['code'] ?? null;
+        $test->code=$data['code'] ?? ($data['test_code'] ?? null);
+        $test->category=$data['category'] ?? null;
         $test->sample_type=$data['sample_type'] ?? null;
         $test->turnaround_time=$data['turnaround_time'] ?? null;
         $test->preparation_notes=$data['preparation_notes'] ?? null;
-        $test->extra_notes=$data['extra_notes'] ?? null;
+        $test->fasting_required = array_key_exists('fasting_required', $data)
+            ? (bool) $data['fasting_required']
+            : false;
+        $test->extra_notes=$data['extra_notes'] ?? ($data['description'] ?? null);
         $test->price=$data['price'];
+        $test->cash_price = $data['cash_price'] ?? null;
+        $test->hmo_price = $data['hmo_price'] ?? null;
+        $test->emergency_price = $data['emergency_price'] ?? null;
         $test->is_active=array_key_exists('is_active', $data) ? (bool) $data['is_active'] : 1;
         $test->status_reason=$data['status_reason'] ?? null;
+        if (array_key_exists('status', $data)) {
+            $this->applyStatusToTest($test, $data['status']);
+        }
 
         $test->save();
 
@@ -151,11 +169,19 @@ class TestController extends Controller
             'hospital_id' => 'required',
             'name' => 'required|string|max:255',
             'code' => 'nullable|string|max:100',
+            'test_code' => 'nullable|string|max:100',
+            'category' => 'nullable|string|max:255',
             'sample_type' => 'nullable|string|max:255',
             'turnaround_time' => 'nullable|string|max:255',
             'preparation_notes' => 'nullable|string',
+            'fasting_required' => 'nullable|boolean',
+            'description' => 'nullable|string',
             'extra_notes' => 'nullable|string',
             'price' => 'required|integer|min:0',
+            'cash_price' => 'nullable|integer|min:0',
+            'hmo_price' => 'nullable|integer|min:0',
+            'emergency_price' => 'nullable|integer|min:0',
+            'status' => 'nullable|in:published,draft,archived',
             'is_active' => 'nullable|boolean',
             'status_reason' => 'nullable|string|max:255',
             'price_reason' => 'nullable|string|max:255',
@@ -174,16 +200,26 @@ class TestController extends Controller
         $previousPrice = $test_->price;
         $test_->hospital_id=$data['hospital_id'];
         $test_->name=$data['name'];
-        $test_->code=$data['code'] ?? null;
+        $test_->code=$data['code'] ?? ($data['test_code'] ?? null);
+        $test_->category=$data['category'] ?? null;
         $test_->sample_type=$data['sample_type'] ?? null;
         $test_->turnaround_time=$data['turnaround_time'] ?? null;
         $test_->preparation_notes=$data['preparation_notes'] ?? null;
+        if (array_key_exists('fasting_required', $data)) {
+            $test_->fasting_required = (bool) $data['fasting_required'];
+        }
         $test_->price=$data['price'];
-        $test_->extra_notes=$data['extra_notes'] ?? null;
+        $test_->cash_price = $data['cash_price'] ?? null;
+        $test_->hmo_price = $data['hmo_price'] ?? null;
+        $test_->emergency_price = $data['emergency_price'] ?? null;
+        $test_->extra_notes=$data['extra_notes'] ?? ($data['description'] ?? null);
         if (array_key_exists('is_active', $data)) {
             $test_->is_active = (bool) $data['is_active'];
         }
         $test_->status_reason=$data['status_reason'] ?? null;
+        if (array_key_exists('status', $data)) {
+            $this->applyStatusToTest($test_, $data['status']);
+        }
         $test_->save();
 
         if ($previousPrice !== $test_->price) {
@@ -201,6 +237,52 @@ class TestController extends Controller
         , 200);
     }
 
+    public function updateStatus(Request $request, $id)
+    {
+        $validator = Validator::make($request->all(), [
+            'status' => 'required|in:published,draft,archived',
+        ]);
+
+        if ($validator->fails()) {
+            return response(['Validation errors' => $validator->errors()->all()], 422);
+        }
+
+        $test_ = test::find($id);
+        if (!$test_) {
+            return response()->json(['message' => 'test not found.'], 404);
+        }
+
+        $this->authorize('update', $test_);
+        $this->applyStatusToTest($test_, $request->input('status'));
+        $test_->save();
+
+        return response(new TestResource($test_), 200);
+    }
+
+    public function duplicate($id)
+    {
+        $source = test::find($id);
+        if (!$source) {
+            return response()->json(['message' => 'test not found.'], 404);
+        }
+
+        $this->authorize('update', $source);
+
+        $copy = $source->replicate();
+        $copy->name = trim($source->name.' (Copy)');
+
+        if (!empty($source->code)) {
+            $suffix = strtoupper(substr(bin2hex(random_bytes(3)), 0, 4));
+            $copy->code = $source->code.'-C'.$suffix;
+        }
+
+        $copy->is_active = false;
+        $copy->status_reason = 'draft';
+        $copy->save();
+
+        return response(new TestResource($copy), 200);
+    }
+
     /**
      * Remove the specified resource from storage.
      *
@@ -213,5 +295,27 @@ class TestController extends Controller
         $test->delete();
    
        return response(['message' => 'Deleted']);
+    }
+
+    private function applyStatusToTest(test $test, string $status): void
+    {
+        $normalized = strtolower(trim($status));
+
+        if ($normalized === 'published') {
+            $test->is_active = true;
+            $test->status_reason = null;
+            return;
+        }
+
+        if ($normalized === 'draft') {
+            $test->is_active = false;
+            $test->status_reason = 'draft';
+            return;
+        }
+
+        if ($normalized === 'archived') {
+            $test->is_active = false;
+            $test->status_reason = 'archived';
+        }
     }
 }

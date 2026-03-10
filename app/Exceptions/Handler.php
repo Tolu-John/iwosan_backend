@@ -56,7 +56,9 @@ class Handler extends ExceptionHandler
 
     public function render($request, Throwable $e)
     {
-        if ($request->expectsJson() && $e instanceof AuthenticationException) {
+        $isApiRequest = $request->expectsJson() || $request->is('api/*');
+
+        if ($isApiRequest && $e instanceof AuthenticationException) {
             $requestId = $request->attributes->get('request_id');
             return response()->json([
                 'message' => 'Unauthenticated.',
@@ -64,7 +66,7 @@ class Handler extends ExceptionHandler
             ], 401);
         }
 
-        if ($request->expectsJson() && $e instanceof AuthorizationException) {
+        if ($isApiRequest && $e instanceof AuthorizationException) {
             $requestId = $request->attributes->get('request_id');
             $message = $e->getMessage() ?: 'Forbidden';
             return response()->json([
@@ -73,8 +75,13 @@ class Handler extends ExceptionHandler
             ], 403);
         }
 
-        if ($request->expectsJson() && ($e instanceof ValidationException)) {
+        if ($isApiRequest && ($e instanceof ValidationException)) {
             $requestId = $request->attributes->get('request_id');
+            Log::warning('validation.failed', [
+                'request_id' => $requestId,
+                'path' => $request->path(),
+                'errors' => $e->errors(),
+            ]);
             return response()->json([
                 'message' => 'Validation failed.',
                 'errors' => $e->errors(),
@@ -82,7 +89,7 @@ class Handler extends ExceptionHandler
             ], 422);
         }
 
-        if ($request->expectsJson() && !($e instanceof ValidationException)) {
+        if ($isApiRequest && !($e instanceof ValidationException)) {
             $status = method_exists($e, 'getStatusCode') ? $e->getStatusCode() : 500;
             $message = $e->getMessage() ?: 'Server Error';
             $requestId = $request->attributes->get('request_id');

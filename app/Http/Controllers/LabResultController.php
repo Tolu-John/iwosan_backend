@@ -11,6 +11,8 @@ use App\Models\LabResultAuditLog;
 use App\Services\AccessService;
 use App\Services\LabResultService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class LabResultController extends Controller
 {
@@ -78,13 +80,45 @@ class LabResultController extends Controller
      */
     public function store(StoreLabResultRequest $request)
     {
-        $data = $request->validated();
-        $file = $request->file('file');
-        $files = $request->file('files', []);
+        $requestId = $request->attributes->get('request_id');
+        Log::info('labresult.store.start', [
+            'request_id' => $requestId,
+            'has_file' => $request->hasFile('file'),
+            'files_count' => is_array($request->file('files')) ? count($request->file('files')) : 0,
+            'has_base64' => trim((string) $request->input('file_base64')) !== '',
+            'auth_user_id' => optional(auth()->user())->id,
+            'patient_id' => $request->input('patient_id'),
+        ]);
 
-        $labResult = $this->labResults->create($data, $file, $this->access, $files);
+        try {
+            $data = $request->validated();
+            $file = $request->file('file');
+            $files = $request->file('files', []);
+            $base64 = $request->input('file_base64');
+            $base64Name = $request->input('file_name');
 
-        return response(new LabResultResource($labResult), 200);
+            Log::info('labresult.store.validated', [
+                'request_id' => $requestId,
+                'name' => $data['name'] ?? null,
+                'lab_name' => $data['lab_name'] ?? null,
+            ]);
+
+            $labResult = $this->labResults->create($data, $file, $this->access, $files, $base64, $base64Name);
+
+            Log::info('labresult.store.success', [
+                'request_id' => $requestId,
+                'lab_result_id' => $labResult->id,
+            ]);
+
+            return response(new LabResultResource($labResult), 200);
+        } catch (Throwable $e) {
+            Log::error('labresult.store.failed', [
+                'request_id' => $requestId,
+                'exception' => get_class($e),
+                'message' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
     }
 
     /**
@@ -156,8 +190,10 @@ class LabResultController extends Controller
 
         $file = $request->file('file');
         $files = $request->file('files', []);
+        $base64 = $request->input('file_base64');
+        $base64Name = $request->input('file_name');
 
-        $labResult = $this->labResults->update($labResult, $data, $file, $this->access, $files);
+        $labResult = $this->labResults->update($labResult, $data, $file, $this->access, $files, $base64, $base64Name);
 
         return response(new LabResultResource($labResult), 200);
         

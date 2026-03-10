@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Appointment;
 use App\Models\CommEvent;
 use App\Models\CommThread;
 use App\Models\Consultation;
@@ -25,6 +26,7 @@ class CommCallController extends Controller
         $validator = Validator::make($request->all(), [
             'thread_id' => 'nullable|integer',
             'consultation_id' => 'nullable|integer',
+            'appointment_id' => 'nullable|integer',
             'type' => 'required|string|in:voice,video',
         ]);
 
@@ -34,6 +36,7 @@ class CommCallController extends Controller
 
         $data = $validator->validated();
         $thread = null;
+        $appointment = null;
 
         if (!empty($data['thread_id'])) {
             $thread = CommThread::find($data['thread_id']);
@@ -48,8 +51,28 @@ class CommCallController extends Controller
             if (!$this->access->canAccessConsultation($consultation)) {
                 return response()->json(['message' => 'Forbidden'], 403);
             }
+                $thread = CommThread::firstOrCreate(
+                    ['consultation_id' => $consultation->id, 'channel' => 'whatsapp'],
+                    [
+                        'status' => 'active',
+                        'created_by_user_id' => Auth::id(),
+                        'created_by_role' => $this->currentRole(),
+                    ]
+                );
+        } elseif (!empty($data['appointment_id'])) {
+            $appointment = Appointment::find($data['appointment_id']);
+            if (!$appointment) {
+                return response()->json(['message' => 'Appointment not found'], 404);
+            }
+            if (!$this->access->canAccessAppointment($appointment)) {
+                return response()->json(['message' => 'Forbidden'], 403);
+            }
             $thread = CommThread::firstOrCreate(
-                ['consultation_id' => $consultation->id, 'channel' => 'whatsapp'],
+                [
+                    'consultation_id' => null,
+                    'channel' => 'whatsapp',
+                    'provider_thread_id' => 'appointment:' . $appointment->id,
+                ],
                 [
                     'status' => 'active',
                     'created_by_user_id' => Auth::id(),
@@ -57,7 +80,7 @@ class CommCallController extends Controller
                 ]
             );
         } else {
-            return response()->json(['message' => 'thread_id or consultation_id is required'], 422);
+            return response()->json(['message' => 'thread_id, consultation_id or appointment_id is required'], 422);
         }
 
         if ($thread->consultation_id) {
@@ -75,6 +98,7 @@ class CommCallController extends Controller
             'event_timestamp' => Carbon::now(),
             'metadata' => [
                 'type' => $data['type'],
+                'appointment_id' => $appointment?->id,
             ],
         ]);
 

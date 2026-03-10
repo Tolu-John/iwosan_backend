@@ -24,6 +24,9 @@ class PatientLiteResource extends JsonResource
                 'address'=> $this->address,
                 'avatar' => $user?->user_img,
                 'verified' => true,
+                'push_notifications_enabled' => (bool) $this->push_notifications_enabled,
+                'sms_alerts_enabled' => (bool) $this->sms_alerts_enabled,
+                'share_vitals_with_carers' => (bool) $this->share_vitals_with_carers,
     ];
     }
 }

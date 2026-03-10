@@ -39,7 +39,7 @@ class StoreCertliceRequest extends FormRequest
             'expires_at' => 'nullable|date|after_or_equal:issued_at',
             'notes' => 'nullable|string',
             'file_name' => 'required|string|max:255',
-            'file' => 'required|mimes:jpeg,png,pdf',
+            'file' => 'required|file|max:10240|mimes:jpeg,jpg,png,pdf,heic,heif,webp',
         ];
     }
 }

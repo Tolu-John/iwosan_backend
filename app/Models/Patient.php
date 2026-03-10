@@ -81,11 +81,17 @@ class Patient extends Model
         'other_kin_name',
         'other_kin_phone',
         'other_kin_address',
+        'push_notifications_enabled',
+        'sms_alerts_enabled',
+        'share_vitals_with_carers',
     ];
 
     protected $casts = [
         'kin_address' => EncryptedString::class,
         'other_kin_address' => EncryptedString::class,
+        'push_notifications_enabled' => 'boolean',
+        'sms_alerts_enabled' => 'boolean',
+        'share_vitals_with_carers' => 'boolean',
     ];
 
 }
