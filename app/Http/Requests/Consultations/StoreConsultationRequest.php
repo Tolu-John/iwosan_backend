@@ -99,11 +99,16 @@ class StoreConsultationRequest extends FormRequest
                     if (!isset($home['address']) || trim((string) $home['address']) === '') {
                         $validator->errors()->add('hConsultation.address', 'address is required.');
                     }
-                    if (!array_key_exists('ward_id', $home) || $home['ward_id'] === null || $home['ward_id'] === '') {
-                        $validator->errors()->add('hConsultation.ward_id', 'ward_id is required.');
-                    }
                     if (!array_key_exists('admitted', $home)) {
                         $validator->errors()->add('hConsultation.admitted', 'admitted is required.');
+                    }
+                    $admitted = $this->isTruthy($home['admitted'] ?? null);
+                    $requiresWard = $type === 'Home visit Admitted' || $admitted;
+                    if (
+                        $requiresWard &&
+                        (!array_key_exists('ward_id', $home) || $home['ward_id'] === null || $home['ward_id'] === '')
+                    ) {
+                        $validator->errors()->add('hConsultation.ward_id', 'ward_id is required when admitted.');
                     }
                 }
                 if ($virtual !== null) {
@@ -150,5 +155,21 @@ class StoreConsultationRequest extends FormRequest
                 }
             }
         });
+    }
+
+    private function isTruthy(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return $value === 1;
+        }
+        if (is_string($value)) {
+            $normalized = strtolower(trim($value));
+            return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
+        }
+
+        return false;
     }
 }

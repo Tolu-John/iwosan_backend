@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Payment;
 use App\Models\PaymentWebhookEvent;
 use App\Services\PaymentService;
+use App\Services\TeletestWorkflowService;
 use Carbon\Carbon;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -27,7 +28,7 @@ class ProcessPaymentWebhookJob implements ShouldQueue
         $this->eventId = $eventId;
     }
 
-    public function handle(PaymentService $payments): void
+    public function handle(PaymentService $payments, TeletestWorkflowService $teletestWorkflow): void
     {
         $eventLog = PaymentWebhookEvent::find($this->eventId);
         if (!$eventLog || $eventLog->processed_at) {
@@ -90,6 +91,8 @@ class ProcessPaymentWebhookJob implements ShouldQueue
             'gateway' => 'paystack',
         ]);
 
+        $this->syncTeletestWorkflowFromPayment($payment, $status, $teletestWorkflow);
+
         $eventLog->processed_at = Carbon::now();
         $eventLog->save();
     }
@@ -113,5 +116,65 @@ class ProcessPaymentWebhookJob implements ShouldQueue
         }
 
         return null;
+    }
+
+    private function syncTeletestWorkflowFromPayment(Payment $payment, string $paymentStatus, TeletestWorkflowService $workflow): void
+    {
+        if ((string) $payment->type !== 'teletest' || !(int) $payment->type_id) {
+            return;
+        }
+
+        $teletest = \App\Models\Teletest::find((int) $payment->type_id);
+        if (!$teletest) {
+            return;
+        }
+
+        try {
+            if ($paymentStatus === 'paid' && in_array((string) $teletest->status, ['awaiting_payment', 'payment_failed'], true)) {
+                $workflow->transitionSystem(
+                    $teletest,
+                    'scheduled',
+                    'payment_verified',
+                    'Payment verified via webhook.'
+                );
+                return;
+            }
+
+            if ($paymentStatus === 'failed' && (string) $teletest->status === 'awaiting_payment') {
+                $workflow->transitionSystem(
+                    $teletest,
+                    'payment_failed',
+                    'payment_failed',
+                    'Payment attempt failed via webhook.'
+                );
+                return;
+            }
+
+            if ($paymentStatus === 'refund_pending' && (string) $teletest->status === 'cancelled_by_hospital') {
+                $workflow->transitionSystem(
+                    $teletest,
+                    'payment_refund_pending',
+                    'refund_started',
+                    'Refund initiated via webhook.'
+                );
+                return;
+            }
+
+            if ($paymentStatus === 'refunded' && (string) $teletest->status === 'payment_refund_pending') {
+                $workflow->transitionSystem(
+                    $teletest,
+                    'payment_refunded',
+                    'refund_completed',
+                    'Refund completed via webhook.'
+                );
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Failed syncing teletest workflow from payment webhook.', [
+                'payment_id' => $payment->id,
+                'teletest_id' => $teletest->id,
+                'status' => $paymentStatus,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }

@@ -51,7 +51,7 @@ return [
     ],
 
     'allowed_transitions' => [
-        'requested' => ['awaiting_clinician_approval', 'cancelled_by_patient', 'cancelled_by_hospital'],
+        'requested' => ['awaiting_clinician_approval', 'pending_review', 'cancelled_by_patient', 'cancelled_by_hospital'],
         'pending_review' => ['awaiting_clinician_approval', 'cancelled_by_patient', 'cancelled_by_hospital'],
         'awaiting_clinician_approval' => ['pending_payment', 'scheduled', 'pending_review', 'cancelled_by_patient', 'cancelled_by_hospital'],
         'reschedule_requested' => ['rescheduled_confirmed', 'pending_review', 'scheduled', 'cancelled_by_hospital'],
@@ -60,9 +60,9 @@ return [
         'payment_failed' => ['pending_payment', 'payment_expired', 'cancelled_by_patient', 'cancelled_by_hospital'],
         'payment_expired' => ['pending_payment', 'closed'],
         'scheduled' => ['waiting_room_open'],
-        'waiting_room_open' => ['queued_for_clinician'],
+        'waiting_room_open' => ['queued_for_clinician', 'clinician_admitted_patient'],
         'queued_for_clinician' => ['clinician_admitted_patient'],
-        'clinician_admitted_patient' => ['consent_pending'],
+        'clinician_admitted_patient' => ['consent_pending', 'consent_granted'],
         'consent_pending' => ['consent_granted'],
         'consent_granted' => ['session_link_sent'],
         'session_link_sent' => ['session_ready'],
@@ -72,7 +72,7 @@ return [
         'in_progress' => ['clinical_closeout_pending'],
         'session_interrupted' => ['in_progress'],
         'session_failed' => ['failed', 'escalation_open'],
-        'clinical_closeout_pending' => ['completed'],
+        'clinical_closeout_pending' => ['review_pending', 'completed'],
         'completed' => ['review_pending'],
         'session_ended' => ['clinical_closeout_pending'],
         'review_pending' => ['record_released'],
@@ -137,7 +137,7 @@ return [
         ],
         'waiting_room_open' => [
             'patient' => ['join_waiting_room'],
-            'clinician' => ['open_queue'],
+            'clinician' => ['admit_patient', 'open_queue'],
             'hospital' => ['monitor_queue'],
         ],
         'queued_for_clinician' => [
@@ -368,11 +368,11 @@ return [
         'send_session_link' => 'session_link_sent',
         'start_consultation' => 'session_live',
         'start_response' => 'escalation_in_progress',
-        'start_session_setup' => 'consent_pending',
+        'start_session_setup' => '__dynamic_session_setup',
         'submit_failure_summary' => '__stay',
         'submit_final_note' => '__stay',
         'submit_reason' => '__stay',
-        'submit_report' => 'completed',
+        'submit_report' => 'review_pending',
         'submit_response' => '__stay',
         'terminate_case' => 'escalation_unresolved',
         'track_access' => '__stay',
@@ -416,6 +416,8 @@ return [
         'waiting_room_open' => [
             'target' => 'Waiting room should open at configured lead time (e.g., 15 minutes before session).',
             'open_lead_minutes' => (int) env('VIRTUAL_VISIT_WAITING_ROOM_OPEN_LEAD_MINUTES', 15),
+            'join_window_minutes' => (int) env('VIRTUAL_VISIT_JOIN_WINDOW_MINUTES', 15),
+            'late_join_allowance_minutes' => (int) env('VIRTUAL_VISIT_LATE_JOIN_ALLOWANCE_MINUTES', 120),
             'timezone' => env('VIRTUAL_VISIT_WAITING_ROOM_TIMEZONE', 'Africa/Lagos'),
         ],
         'queued_for_clinician' => [

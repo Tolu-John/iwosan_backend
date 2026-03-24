@@ -433,6 +433,8 @@ Route::resource('/ward', 'App\Http\Controllers\WardController', ['except' => ['c
     
 
 
+Route::post('/appointment/{id}/actions/{actionKey}', [AppointmentController::class, 'action']);
+Route::post('/appointment/{id}/virtual-actions/{actionKey}', [AppointmentController::class, 'virtualAction']);
 Route::resource('/appointment', 'App\Http\Controllers\AppointmentController', ['except' => ['create', 'edit']]);
 
 
@@ -497,6 +499,10 @@ Route::patch('/transfer/{id}/status', [TransfersController::class, 'update']);
 
 
 Route::apiResource('/teletest', TeletestController::class);
+Route::post('/teletest/{teletest}/actions/{actionKey}', [TeletestController::class, 'runAction']);
+Route::post('/v1/teletest/{teletest}/actions/{actionKey}', [TeletestController::class, 'runAction']);
+Route::get('/teletest/{teletest}/timeline', [TeletestController::class, 'timeline']);
+Route::get('/v1/teletest/{teletest}/timeline', [TeletestController::class, 'timeline']);
 
 
 Route::patch('/test/{id}/status', [TestController::class, 'updateStatus']);

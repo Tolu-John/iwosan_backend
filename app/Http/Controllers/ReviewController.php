@@ -3,10 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Http\Resources\ReviewResource;
+use App\Models\Appointment;
 use App\Models\Carer;
 use App\Models\Consultation;
 use App\Models\Review;
 use App\Services\AccessService;
+use App\Services\VirtualVisitWorkflowService;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
@@ -17,10 +19,12 @@ use Illuminate\Support\Facades\Validator;
 class ReviewController extends Controller
 {
     private AccessService $access;
+    private VirtualVisitWorkflowService $virtualWorkflow;
 
-    public function __construct(AccessService $access)
+    public function __construct(AccessService $access, VirtualVisitWorkflowService $virtualWorkflow)
     {
         $this->access = $access;
+        $this->virtualWorkflow = $virtualWorkflow;
     }
     /**
      * Display a listing of the resource.
@@ -153,6 +157,7 @@ class ReviewController extends Controller
 
                 return $review->load(['patient.user', 'consultation.carer.user', 'consultation.carer.hospital']);
             });
+            $this->releaseVirtualRecordAfterReviewSubmission($consultation);
         } catch (QueryException $e) {
             // Handle race condition against unique(patient_id, consultation_id).
             if ((string) $e->getCode() === '23000') {
@@ -317,6 +322,47 @@ class ReviewController extends Controller
             'per_page' => $perPage,
             'results' => $results,
         ], 200);
+    }
+
+    private function releaseVirtualRecordAfterReviewSubmission(Consultation $consultation): void
+    {
+        $appointment = Appointment::query()
+            ->where('consult_id', $consultation->id)
+            ->where('appointment_type', 'like', '%virtual%')
+            ->orderByDesc('id')
+            ->first();
+
+        if (!$appointment) {
+            return;
+        }
+
+        $status = strtolower(trim((string) $appointment->status));
+        if (!in_array($status, ['completed', 'review_pending'], true)) {
+            return;
+        }
+
+        $payload = [
+            'status_reason_note' => 'Patient submitted consultation review.',
+            'status_reason_code' => 'patient_review_submitted',
+        ];
+
+        $appointment = $this->virtualWorkflow->runAction(
+            $appointment,
+            'review_carer',
+            $payload,
+            $this->access
+        );
+
+        if (strtolower(trim((string) $appointment->status)) !== 'review_pending') {
+            return;
+        }
+
+        $this->virtualWorkflow->runAction(
+            $appointment,
+            'review_carer',
+            $payload,
+            $this->access
+        );
     }
 
     private function paginateReviews($query, ?string $status, ?string $ratingMin, ?string $ratingMax, ?string $dateFrom, ?string $dateTo, ?string $q, int $perPage, int $page, bool $hideRejected): array

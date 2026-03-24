@@ -181,7 +181,39 @@ class SendStatusTransitionNotifications implements ShouldQueue
         }
 
         if (in_array($role, ['carer', 'hospital'], true)) {
-            return in_array($toStatus, ['scheduled', 'in_progress', 'completed', 'cancelled', 'no_show'], true);
+            return in_array($toStatus, [
+                'scheduled',
+                'in_progress',
+                'completed',
+                'cancelled',
+                'no_show',
+                // Home visit workflow statuses.
+                'awaiting_hospital_approval',
+                'awaiting_clinician_approval',
+                'awaiting_payment',
+                'en_route',
+                'arrived',
+                'visit_completed',
+                'admission_recommended',
+                'home_admission_quote_pending_hospital',
+                'admission_revision_requested',
+                'admission_rejected',
+                'home_admitted_pending_payment',
+                'home_admitted_active',
+                'payment_due',
+                'payment_overdue',
+                'care_paused_non_critical',
+                'episode_closed_nonpayment',
+                'discharge_initiated',
+                'episode_completed',
+                'escalation_open',
+                'escalation_in_progress',
+                'escalation_in_transfer',
+                'escalation_resolved',
+                'admission_expired',
+                'admission_cancelled',
+                'escalation_unresolved',
+            ], true);
         }
 
         return false;

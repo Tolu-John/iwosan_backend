@@ -18,7 +18,7 @@ class VirtualVisitWorkflowActionTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_hospital_can_advance_requested_to_pending_review(): void
+    public function test_hospital_can_advance_requested_to_awaiting_clinician_approval(): void
     {
         [$patientUser, $carerUser, $hospitalUser, $patient, $carer, $hospital] = $this->seedActors();
 
@@ -39,17 +39,17 @@ class VirtualVisitWorkflowActionTest extends TestCase
 
         $response
             ->assertStatus(200)
-            ->assertJsonPath('status', 'pending_review');
+            ->assertJsonPath('status', 'awaiting_clinician_approval');
 
         $this->assertDatabaseHas('appointments', [
             'id' => $appointment->id,
-            'status' => 'pending_review',
+            'status' => 'awaiting_clinician_approval',
         ]);
 
         $this->assertDatabaseHas('appointment_status_history', [
             'appointment_id' => $appointment->id,
             'from_status' => 'requested',
-            'to_status' => 'pending_review',
+            'to_status' => 'awaiting_clinician_approval',
             'action_key' => 'approve',
             'actor_role' => 'hospital',
         ]);
@@ -57,7 +57,7 @@ class VirtualVisitWorkflowActionTest extends TestCase
         $this->assertDatabaseHas('virtual_visit_status_history', [
             'appointment_id' => $appointment->id,
             'from_status' => 'requested',
-            'to_status' => 'pending_review',
+            'to_status' => 'awaiting_clinician_approval',
             'action_key' => 'approve',
             'actor_role' => 'hospital',
         ]);
@@ -262,6 +262,39 @@ class VirtualVisitWorkflowActionTest extends TestCase
             ->assertStatus(422);
     }
 
+    public function test_submit_report_transitions_closeout_to_review_pending(): void
+    {
+        [, $carerUser, , $patient, $carer] = $this->seedActors();
+
+        $appointment = Appointment::factory()->create([
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'appointment_type' => 'virtual_visit',
+            'status' => 'clinical_closeout_pending',
+            'date_time' => now()->addHour()->format('Y-m-d H:i:s'),
+        ]);
+
+        Passport::actingAs($carerUser);
+        $this->postJson("/api/v1/appointment/{$appointment->id}/virtual-actions/submit_report", [
+            'closeout_submitted' => true,
+            'status_reason_note' => 'Clinical report submitted.',
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('status', 'review_pending');
+
+        $this->assertDatabaseHas('appointments', [
+            'id' => $appointment->id,
+            'status' => 'review_pending',
+        ]);
+        $this->assertDatabaseHas('virtual_visit_status_history', [
+            'appointment_id' => $appointment->id,
+            'from_status' => 'clinical_closeout_pending',
+            'to_status' => 'review_pending',
+            'action_key' => 'submit_report',
+            'actor_role' => 'clinician',
+        ]);
+    }
+
     public function test_reassign_updates_clinician_even_when_status_stays_same(): void
     {
         [, , $hospitalUser, $patient, $carer, $hospital] = $this->seedActors();
@@ -372,6 +405,68 @@ class VirtualVisitWorkflowActionTest extends TestCase
             'action_key' => 'accept',
             'actor_role' => 'carer',
         ]);
+    }
+
+    public function test_start_session_setup_skips_to_consent_granted_when_booking_consent_is_already_accepted(): void
+    {
+        [$patientUser, $carerUser, $hospitalUser, $patient, $carer, $hospital] = $this->seedActors();
+
+        $appointment = Appointment::factory()->create([
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'appointment_type' => 'virtual_visit',
+            'status' => 'clinician_admitted_patient',
+            'consent_accepted' => true,
+            'date_time' => now()->addHour()->format('Y-m-d H:i:s'),
+        ]);
+
+        Passport::actingAs($carerUser);
+
+        $this->postJson("/api/v1/appointment/{$appointment->id}/virtual-actions/start_session_setup")
+            ->assertStatus(200)
+            ->assertJsonPath('status', 'consent_granted');
+
+        $appointment->refresh();
+        $this->assertSame('consent_granted', $appointment->status);
+        $this->assertNotNull($appointment->consent_granted_at);
+
+        $this->assertDatabaseHas('virtual_visit_status_history', [
+            'appointment_id' => $appointment->id,
+            'from_status' => 'clinician_admitted_patient',
+            'to_status' => 'consent_granted',
+            'action_key' => 'start_session_setup',
+            'actor_role' => 'clinician',
+        ]);
+
+        $this->assertDatabaseHas('virtual_visit_consents', [
+            'appointment_id' => $appointment->id,
+            'consent_version' => 'v1',
+            'granted_by_user_id' => $patientUser->id,
+        ]);
+    }
+
+    public function test_start_session_setup_moves_to_consent_pending_when_booking_consent_was_not_accepted(): void
+    {
+        [$patientUser, $carerUser, $hospitalUser, $patient, $carer, $hospital] = $this->seedActors();
+
+        $appointment = Appointment::factory()->create([
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'appointment_type' => 'virtual_visit',
+            'status' => 'clinician_admitted_patient',
+            'consent_accepted' => false,
+            'date_time' => now()->addHour()->format('Y-m-d H:i:s'),
+        ]);
+
+        Passport::actingAs($carerUser);
+
+        $this->postJson("/api/v1/appointment/{$appointment->id}/virtual-actions/start_session_setup")
+            ->assertStatus(200)
+            ->assertJsonPath('status', 'consent_pending');
+
+        $appointment->refresh();
+        $this->assertSame('consent_pending', $appointment->status);
+        $this->assertNull($appointment->consent_granted_at);
     }
 
     /**

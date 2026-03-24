@@ -211,14 +211,29 @@ class ConsultationService
                 abort(422, 'hConsultation is required for home visits.');
             }
 
-            $h = HConsultation::firstOrNew(['consultation_id' => $consultation->id]);
-            $h->consultation_id = $consultation->id;
-            $h->address = $data['hConsultation']['address'];
-            if (array_key_exists('ward_id', $data['hConsultation'])) {
-                $h->ward_id = $data['hConsultation']['ward_id'];
+            $homePayload = (array) $data['hConsultation'];
+            $admitted = $this->isTruthy($homePayload['admitted'] ?? null);
+            $requiresWard = $consultation->treatment_type === self::TYPE_HOME_ADMITTED || $admitted;
+            $wardProvided = array_key_exists('ward_id', $homePayload)
+                && $homePayload['ward_id'] !== null
+                && $homePayload['ward_id'] !== '';
+
+            if ($requiresWard && !$wardProvided) {
+                abort(422, 'ward_id is required when admitted.');
             }
-            if (array_key_exists('admitted', $data['hConsultation'])) {
-                $h->admitted = $data['hConsultation']['admitted'];
+
+            $existing = HConsultation::where('consultation_id', $consultation->id)->first();
+            if (!$requiresWard && !$wardProvided && !$existing) {
+                // Non-admitted home consultation can be recorded without ward linkage.
+                return;
+            }
+
+            $h = $existing ?? new HConsultation();
+            $h->consultation_id = $consultation->id;
+            $h->address = $homePayload['address'];
+            $h->admitted = $admitted ? 1 : 0;
+            if ($wardProvided) {
+                $h->ward_id = (int) $homePayload['ward_id'];
             }
             $h->save();
         }
@@ -229,6 +244,22 @@ class ConsultationService
         if (!in_array($type, [self::TYPE_VIRTUAL, self::TYPE_HOME, self::TYPE_HOME_ADMITTED], true)) {
             abort(422, 'Invalid treatment type.');
         }
+    }
+
+    private function isTruthy(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return $value === 1;
+        }
+        if (is_string($value)) {
+            $normalized = strtolower(trim($value));
+            return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
+        }
+
+        return false;
     }
 
     private function assertCarerBelongsToHospital(int $carerId, int $hospitalId): void

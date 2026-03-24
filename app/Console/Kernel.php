@@ -29,6 +29,9 @@ class Kernel extends ConsoleKernel
         $schedule->command('iwosan:send-appointment-reminders')->hourly();
         $schedule->command('iwosan:send-payment-reminders')->hourly();
         $schedule->command('iwosan:send-lab-result-notifications')->hourly();
+        $schedule->command('iwosan:monitor-home-workflow-sla')->everyTenMinutes();
+        $schedule->command('iwosan:monitor-teletest-workflow-sla')->everyTenMinutes();
+        $schedule->command('iwosan:monitor-virtual-visit-workflow-sla')->everyTenMinutes();
         $schedule->command('compliance:purge-retention')->dailyAt('02:15');
     }
 

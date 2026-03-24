@@ -200,6 +200,70 @@ class ConsultationTest extends TestCase
             ->assertJsonFragment(['status' => 'draft']);
     }
 
+    public function test_patient_can_create_home_visit_consultation_without_ward_id_when_not_admitted(): void
+    {
+        $user = User::factory()->create();
+        $patient = Patient::factory()->create(['user_id' => $user->id]);
+        $hospital = Hospital::factory()->create();
+        $carer = Carer::factory()->create(['hospital_id' => $hospital->id]);
+        Passport::actingAs($user);
+
+        $payload = [
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'hospital_id' => $hospital->id,
+            'payment_id' => null,
+            'status' => 'draft',
+            'treatment_type' => 'Home visit',
+            'diagnosis' => 'Home consult draft',
+            'consult_notes' => 'Home consult notes',
+            'date_time' => '2026-02-10 10:00:00',
+            'hConsultation' => [
+                'address' => '12 Home Street',
+                'admitted' => 0,
+            ],
+        ];
+
+        $response = $this->postJson('/api/v1/consultation', $payload)
+            ->assertStatus(200)
+            ->assertJsonFragment(['status' => 'draft']);
+
+        $consultationId = (int) $response->json('id');
+        $this->assertGreaterThan(0, $consultationId);
+        $this->assertDatabaseMissing('h_consultations', [
+            'consultation_id' => $consultationId,
+        ]);
+    }
+
+    public function test_home_visit_admitted_requires_ward_id(): void
+    {
+        $user = User::factory()->create();
+        $patient = Patient::factory()->create(['user_id' => $user->id]);
+        $hospital = Hospital::factory()->create();
+        $carer = Carer::factory()->create(['hospital_id' => $hospital->id]);
+        Passport::actingAs($user);
+
+        $payload = [
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'hospital_id' => $hospital->id,
+            'payment_id' => null,
+            'status' => 'draft',
+            'treatment_type' => 'Home visit Admitted',
+            'diagnosis' => 'Admitted consult draft',
+            'consult_notes' => 'Admitted consult notes',
+            'date_time' => '2026-02-10 10:00:00',
+            'hConsultation' => [
+                'address' => '12 Home Street',
+                'admitted' => 1,
+            ],
+        ];
+
+        $this->postJson('/api/v1/consultation', $payload)
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['hConsultation.ward_id']);
+    }
+
     public function test_virtual_consultation_rejects_hconsultation_payload(): void
     {
         $user = User::factory()->create();

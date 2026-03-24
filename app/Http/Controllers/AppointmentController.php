@@ -9,6 +9,7 @@ use App\Http\Resources\AppointmentResource;
 use App\Models\Appointment;
 use App\Services\AccessService;
 use App\Services\AppointmentService;
+use App\Services\VirtualVisitWorkflowService;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -18,11 +19,17 @@ class AppointmentController extends Controller
 {
     private AccessService $access;
     private AppointmentService $appointments;
+    private VirtualVisitWorkflowService $virtualWorkflow;
 
-    public function __construct(AccessService $access, AppointmentService $appointments)
+    public function __construct(
+        AccessService $access,
+        AppointmentService $appointments,
+        VirtualVisitWorkflowService $virtualWorkflow
+    )
     {
         $this->access = $access;
         $this->appointments = $appointments;
+        $this->virtualWorkflow = $virtualWorkflow;
     }
     /**
      * Display a listing of the resource.
@@ -72,7 +79,20 @@ class AppointmentController extends Controller
             return $appointments->values();
         }
 
-        $pastStatuses = ['completed', 'cancelled', 'no_show', 'rejected', 'failed', 'expired', 'sample_rejected'];
+        $pastStatuses = [
+            'completed',
+            'visit_completed',
+            'episode_completed',
+            'episode_closed_nonpayment',
+            'admission_rejected',
+            'admission_cancelled',
+            'cancelled',
+            'no_show',
+            'rejected',
+            'failed',
+            'expired',
+            'sample_rejected',
+        ];
 
         if ($scope === 'past') {
             return $appointments
@@ -180,6 +200,133 @@ class AppointmentController extends Controller
 
         return response(new AppointmentResource($appointment), 200);
     
+    }
+
+    public function action(Request $request, $id, string $actionKey)
+    {
+        $appointment = Appointment::find($id);
+        if (!$appointment) {
+            return $this->sendError('Appointment not found.');
+        }
+
+        $this->authorize('update', $appointment);
+
+        $actionKey = strtolower(trim($actionKey));
+
+        $data = $request->validate([
+            'status_reason' => 'nullable|string|max:255',
+            'status_reason_code' => 'nullable|string|max:120',
+            'status_reason_note' => 'nullable|string|max:2000',
+            'disposition' => 'nullable|string|max:120',
+            'pathway' => 'nullable|string|max:60',
+            'severity' => 'nullable|string|max:40',
+            'payment_id' => 'nullable|integer',
+            'current_eta_minutes' => 'nullable|integer|min:0|max:720',
+            'assignment_source' => 'nullable|string|max:80',
+            'currency' => 'nullable|string|max:8',
+            'billing_cycle' => 'nullable|string|max:40',
+            'quote_valid_until' => 'nullable|date',
+            'enrollment_fee_minor' => 'nullable|integer|min:0',
+            'recurring_fee_minor' => 'nullable|integer|min:0',
+            'addons_total_minor' => 'nullable|integer|min:0',
+            'discount_total_minor' => 'nullable|integer|min:0',
+            'tax_total_minor' => 'nullable|integer|min:0',
+            'grand_total_minor' => 'nullable|integer|min:0',
+        ]);
+
+        if ($actionKey === 'approve_quote') {
+            $requiredQuoteFields = [
+                'enrollment_fee_minor',
+                'recurring_fee_minor',
+                'billing_cycle',
+                'addons_total_minor',
+                'tax_total_minor',
+                'discount_total_minor',
+            ];
+            foreach ($requiredQuoteFields as $field) {
+                if (!array_key_exists($field, $data) || $data[$field] === null || $data[$field] === '') {
+                    abort(422, "{$field} is required for {$actionKey}.");
+                }
+            }
+            if (
+                $actionKey === 'approve_quote' &&
+                (int) $data['enrollment_fee_minor'] === 0 &&
+                (int) $data['recurring_fee_minor'] === 0
+            ) {
+                abort(422, 'Quote must include enrollment or recurring fee.');
+            }
+        }
+
+        if (in_array($actionKey, [
+            'request_quote_revision',
+            'reject',
+            'reject_admission',
+            'request_changes',
+            'cancel_admission',
+            'pause_care_non_critical',
+            'close_episode_nonpayment',
+            'mark_escalation_unresolved',
+        ], true)) {
+            $note = trim((string) ($data['status_reason_note'] ?? ''));
+            if ($note === '') {
+                abort(422, "status_reason_note is required for {$actionKey}.");
+            }
+            if (trim((string) ($data['status_reason'] ?? '')) === '') {
+                $data['status_reason'] = $note;
+            }
+        }
+
+        $appointment = $this->appointments->transitionByAction($appointment, $actionKey, $data, $this->access);
+
+        return response(new AppointmentResource($appointment), 200);
+    }
+
+    public function virtualAction(Request $request, $id, string $actionKey)
+    {
+        if (!(bool) config('virtual_visit_workflow.enabled', true)) {
+            return response()->json([
+                'message' => 'Virtual visit workflow actions are currently disabled.',
+            ], 409);
+        }
+
+        $appointment = Appointment::find($id);
+        if (!$appointment) {
+            return $this->sendError('Appointment not found.');
+        }
+
+        $this->authorize('update', $appointment);
+
+        $actionKey = strtolower(trim($actionKey));
+
+        $data = $request->validate([
+            'target_status' => 'nullable|string|max:120',
+            'status_reason' => 'nullable|string|max:255',
+            'status_reason_code' => 'nullable|string|max:120',
+            'status_reason_note' => 'nullable|string|max:2000',
+            'payment_id' => 'nullable|integer',
+            'carer_id' => 'nullable|integer',
+            'reassigned_to' => 'nullable|integer',
+            'current_eta_minutes' => 'nullable|integer|min:0|max:720',
+            'severity' => 'nullable|string|max:40',
+            'pathway' => 'nullable|string|max:60',
+            'consent_version' => 'nullable|string|max:40',
+            'consent_text_hash' => 'nullable|string|max:128',
+            'consent_accepted' => 'nullable|boolean',
+            'closeout_submitted' => 'nullable|boolean',
+        ]);
+
+        if (!array_key_exists('carer_id', $data) && array_key_exists('reassigned_to', $data)) {
+            $data['carer_id'] = $data['reassigned_to'];
+        }
+
+        $appointment = $this->virtualWorkflow->runAction(
+            $appointment,
+            $actionKey,
+            $data,
+            $this->access
+        );
+
+        return response(new AppointmentResource($appointment), 200);
     }
 
     /**

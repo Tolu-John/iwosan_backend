@@ -10,13 +10,17 @@ use Illuminate\Support\Facades\DB;
 
 class TeletestService
 {
-    private const STATUS_DESCRIPTIONS = [
-        'pending_payment' => 'Awaiting payment',
-        'scheduled' => 'Scheduled',
-        'in_progress' => 'In progress',
-        'completed' => 'Completed',
-        'cancelled' => 'Cancelled',
-        'no_show' => 'No show',
+    private const LEGACY_STATUS_MAP = [
+        'requested' => 'awaiting_hospital_approval',
+        'pending' => 'awaiting_payment',
+        'confirmed' => 'scheduled',
+        'assigned' => 'awaiting_technician_approval',
+        'pending_payment' => 'awaiting_payment',
+        'result_uploaded' => 'result_ready',
+        'validated' => 'result_delivered',
+        'completed' => 'visit_completed',
+        'cancelled' => 'cancelled_by_hospital',
+        'no_show' => 'no_show_patient',
     ];
 
     private StatusChangeService $statusChanges;
@@ -51,10 +55,16 @@ class TeletestService
         }
 
         $this->assertCarerBelongsToHospital($data['carer_id'], $data['hospital_id']);
-        $paymentId = $data['payment_id'] ?? null;
-        $this->assertPaymentState($data['status'], $paymentId);
+        $status = $this->normalizeStatus((string) $data['status']);
+        if ($status === null) {
+            abort(422, 'Invalid teletest status.');
+        }
+        $data['status'] = $status;
 
-        return DB::transaction(function () use ($data, $currentHospitalId, $paymentId) {
+        $paymentId = $data['payment_id'] ?? null;
+        $this->assertPaymentStateForStatus($status, $paymentId);
+
+        return DB::transaction(function () use ($data, $currentHospitalId) {
             $teletest = new Teletest();
             $adminApproved = $currentHospitalId ? $data['admin_approved'] : 0;
             $this->fillTeletest($teletest, $data, $adminApproved);
@@ -97,11 +107,16 @@ class TeletestService
         }
 
         $this->assertCarerBelongsToHospital($data['carer_id'], $data['hospital_id']);
-        $fromStatus = $teletest->status;
-        $nextStatus = $data['status'];
+        $fromStatus = $this->normalizeStatus((string) $teletest->status) ?? (string) $teletest->status;
+        $nextStatus = $this->normalizeStatus((string) $data['status']);
+        if ($nextStatus === null) {
+            abort(422, 'Invalid teletest status.');
+        }
+        $data['status'] = $nextStatus;
+
         $paymentId = $data['payment_id'] ?? $teletest->payment_id;
         $this->assertStatusTransitionAllowed($teletest, $fromStatus, $nextStatus, $paymentId, $access);
-        $this->assertPaymentState($data['status'], $paymentId);
+        $this->assertPaymentStateForStatus($nextStatus, $paymentId);
 
         return DB::transaction(function () use ($teletest, $data, $currentHospitalId, $fromStatus, $nextStatus, $paymentId) {
             $adminApproved = $currentHospitalId ? $data['admin_approved'] : $teletest->admin_approved;
@@ -126,13 +141,19 @@ class TeletestService
         $teletest->address = $data['address'];
         $teletest->test_name = $data['test_name'];
         $teletest->status = $data['status'];
+        if (array_key_exists('status_reason', $data)) {
+            $teletest->status_reason = $data['status_reason'] ?: null;
+        }
+        if (array_key_exists('status_reason_note', $data)) {
+            $teletest->status_reason_note = $data['status_reason_note'] ?: null;
+        }
         $teletest->admin_approved = $adminApproved;
         $teletest->date_time = $data['date_time'];
     }
 
     private function applyStatusMetadata(Teletest $teletest, ?string $fromStatus, string $toStatus): void
     {
-        $teletest->status_description = self::STATUS_DESCRIPTIONS[$toStatus] ?? $toStatus;
+        $teletest->status_description = (string) (config("teletest_workflow.statuses.{$toStatus}.label") ?? $toStatus);
 
         if ($fromStatus === $toStatus) {
             return;
@@ -140,24 +161,37 @@ class TeletestService
 
         $now = Carbon::now();
 
-        if (in_array($toStatus, ['scheduled', 'in_progress', 'completed'], true) && !$teletest->scheduled_at) {
+        if (in_array($toStatus, ['scheduled', 'rescheduled_confirmed'], true) && !$teletest->scheduled_at) {
             $teletest->scheduled_at = $now;
         }
 
-        if (in_array($toStatus, ['in_progress', 'completed'], true) && !$teletest->started_at) {
+        if ($toStatus === 'en_route' && !$teletest->departed_at) {
+            $teletest->departed_at = $now;
+        }
+
+        if ($toStatus === 'arrived' && !$teletest->arrived_at) {
+            $teletest->arrived_at = $now;
+        }
+
+        if ($toStatus === 'in_progress' && !$teletest->started_at) {
             $teletest->started_at = $now;
         }
 
-        if ($toStatus === 'completed' && !$teletest->completed_at) {
+        if (in_array($toStatus, ['visit_completed', 'visit_closed'], true) && !$teletest->completed_at) {
             $teletest->completed_at = $now;
         }
 
-        if ($toStatus === 'cancelled' && !$teletest->cancelled_at) {
+        if (in_array($toStatus, ['cancelled_by_hospital', 'cancelled_by_technician'], true) && !$teletest->cancelled_at) {
             $teletest->cancelled_at = $now;
         }
 
-        if ($toStatus === 'no_show' && !$teletest->no_show_at) {
+        if (in_array($toStatus, ['no_show_patient', 'no_show_technician'], true) && !$teletest->no_show_at) {
             $teletest->no_show_at = $now;
+        }
+
+        if ($toStatus === 'technician_reassignment_pending') {
+            $teletest->reassigned_at = $now;
+            $teletest->reassigned_from = $teletest->reassigned_from ?: $teletest->carer_id;
         }
     }
 
@@ -169,9 +203,9 @@ class TeletestService
         }
     }
 
-    private function assertPaymentState(string $status, $paymentId): void
+    private function assertPaymentStateForStatus(string $status, $paymentId): void
     {
-        if (!in_array($status, ['scheduled', 'in_progress', 'completed'], true)) {
+        if (!in_array($status, ['scheduled', 'rescheduled_confirmed'], true)) {
             return;
         }
 
@@ -196,22 +230,40 @@ class TeletestService
             return;
         }
 
-        if (in_array($toStatus, ['scheduled', 'in_progress', 'completed'], true)) {
-            $this->assertPaymentState($toStatus, $paymentId);
+        $workflowTransitions = (array) config('teletest_workflow.allowed_transitions', []);
+        if (array_key_exists($fromStatus, $workflowTransitions)) {
+            $allowed = array_map('strval', (array) ($workflowTransitions[$fromStatus] ?? []));
+            if (!in_array($toStatus, $allowed, true)) {
+                abort(422, "Invalid teletest status transition: {$fromStatus} -> {$toStatus}.");
+            }
         }
 
-        if ($toStatus === 'cancelled') {
+        if ($fromStatus === 'awaiting_payment' && $toStatus === 'scheduled') {
+            $this->assertPaymentStateForStatus($toStatus, $paymentId);
+        }
+
+        if (in_array($toStatus, ['cancelled_by_hospital', 'cancelled_by_technician'], true)) {
             $this->assertCanCancel($teletest, $fromStatus, $access);
         }
 
-        if ($toStatus === 'no_show') {
+        if ($toStatus === 'no_show_patient') {
             $this->assertCanMarkNoShow($teletest, $fromStatus, $access);
         }
     }
 
     private function assertCanCancel(Teletest $teletest, string $fromStatus, AccessService $access): void
     {
-        if (!in_array($fromStatus, ['pending_payment', 'scheduled'], true)) {
+        if (!in_array($fromStatus, [
+            'awaiting_hospital_approval',
+            'hospital_changes_requested',
+            'awaiting_technician_approval',
+            'technician_reassignment_pending',
+            'awaiting_payment',
+            'scheduled',
+            'reschedule_requested_by_patient',
+            'reschedule_requested_by_hospital',
+            'reschedule_requested_by_technician',
+        ], true)) {
             abort(422, 'Only pending or scheduled teletests can be cancelled.');
         }
 
@@ -227,7 +279,9 @@ class TeletestService
         }
 
         if (in_array($role, ['carer', 'hospital'], true)) {
-            if ($fromStatus === 'scheduled' && $testTime && $now->greaterThanOrEqualTo($testTime)) {
+            if (in_array($fromStatus, ['scheduled', 'reschedule_requested_by_patient', 'reschedule_requested_by_hospital', 'reschedule_requested_by_technician'], true)
+                && $testTime
+                && $now->greaterThanOrEqualTo($testTime)) {
                 abort(422, 'Cannot cancel once the teletest start time has passed.');
             }
             return;
@@ -238,8 +292,8 @@ class TeletestService
 
     private function assertCanMarkNoShow(Teletest $teletest, string $fromStatus, AccessService $access): void
     {
-        if ($fromStatus !== 'scheduled') {
-            abort(422, 'Only scheduled teletests can be marked as no-show.');
+        if (!in_array($fromStatus, ['arrived', 'scheduled'], true)) {
+            abort(422, 'No-show can only be marked from arrived or scheduled state.');
         }
 
         $role = $this->resolveActorRole($access);
@@ -259,7 +313,7 @@ class TeletestService
             return;
         }
 
-        if ($toStatus !== 'cancelled' || !$paymentId) {
+        if (!in_array($toStatus, ['cancelled_by_hospital', 'cancelled_by_technician'], true) || !$paymentId) {
             return;
         }
 
@@ -314,5 +368,25 @@ class TeletestService
         } catch (\Throwable $e) {
             return null;
         }
+    }
+
+    private function normalizeStatus(string $status): ?string
+    {
+        $status = strtolower(trim($status));
+        if ($status === '') {
+            return null;
+        }
+
+        $known = (array) config('teletest_workflow.statuses', []);
+        if (array_key_exists($status, $known)) {
+            return $status;
+        }
+
+        $aliases = (array) config('teletest_workflow.status_aliases', []);
+        if (array_key_exists($status, $aliases)) {
+            return (string) $aliases[$status];
+        }
+
+        return self::LEGACY_STATUS_MAP[$status] ?? null;
     }
 }

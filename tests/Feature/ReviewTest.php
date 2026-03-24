@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Appointment;
 use App\Models\Carer;
 use App\Models\Consultation;
 use App\Models\Hospital;
@@ -46,6 +47,87 @@ class ReviewTest extends TestCase
             'rating' => 5,
             'recomm' => 1,
             'status' => 'published',
+        ]);
+    }
+
+    public function test_patient_review_submission_releases_virtual_record_from_review_pending(): void
+    {
+        [$user, $patient, $carer, $consultation] = $this->buildConsultationContext('completed');
+        $appointment = Appointment::factory()->create([
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'consult_id' => $consultation->id,
+            'appointment_type' => 'virtual_visit',
+            'status' => 'review_pending',
+            'date_time' => now()->addHour()->format('Y-m-d H:i:s'),
+        ]);
+        Passport::actingAs($user);
+
+        $payload = [
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'consultation_id' => $consultation->id,
+            'text' => 'Great communication and clear guidance.',
+            'rating' => 5,
+            'recomm' => 'yes',
+        ];
+
+        $this->postJson('/api/v1/review', $payload)->assertStatus(200);
+
+        $this->assertDatabaseHas('appointments', [
+            'id' => $appointment->id,
+            'status' => 'record_released',
+        ]);
+        $this->assertDatabaseHas('virtual_visit_status_history', [
+            'appointment_id' => $appointment->id,
+            'from_status' => 'review_pending',
+            'to_status' => 'record_released',
+            'action_key' => 'review_carer',
+            'actor_role' => 'patient',
+        ]);
+    }
+
+    public function test_patient_review_submission_releases_virtual_record_from_legacy_completed(): void
+    {
+        [$user, $patient, $carer, $consultation] = $this->buildConsultationContext('completed');
+        $appointment = Appointment::factory()->create([
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'consult_id' => $consultation->id,
+            'appointment_type' => 'virtual_visit',
+            'status' => 'completed',
+            'date_time' => now()->addHour()->format('Y-m-d H:i:s'),
+        ]);
+        Passport::actingAs($user);
+
+        $payload = [
+            'patient_id' => $patient->id,
+            'carer_id' => $carer->id,
+            'consultation_id' => $consultation->id,
+            'text' => 'Good session with clear follow-up.',
+            'rating' => 4,
+            'recomm' => 'yes',
+        ];
+
+        $this->postJson('/api/v1/review', $payload)->assertStatus(200);
+
+        $this->assertDatabaseHas('appointments', [
+            'id' => $appointment->id,
+            'status' => 'record_released',
+        ]);
+        $this->assertDatabaseHas('virtual_visit_status_history', [
+            'appointment_id' => $appointment->id,
+            'from_status' => 'completed',
+            'to_status' => 'review_pending',
+            'action_key' => 'review_carer',
+            'actor_role' => 'patient',
+        ]);
+        $this->assertDatabaseHas('virtual_visit_status_history', [
+            'appointment_id' => $appointment->id,
+            'from_status' => 'review_pending',
+            'to_status' => 'record_released',
+            'action_key' => 'review_carer',
+            'actor_role' => 'patient',
         ]);
     }
 

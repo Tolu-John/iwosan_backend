@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use Carbon\Carbon;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 class UserResource extends JsonResource
@@ -14,11 +15,17 @@ class UserResource extends JsonResource
      */
     public function toArray($request)
     {
-
-        //age referred to here is dob
-        $dateOfBirth = $this->age;
-        $today = date("d-m-Y");
-         $diff = date_diff(date_create($dateOfBirth), date_create($today));
+        // Legacy field naming: "age" stores DOB in many records.
+        $dateOfBirth = is_null($this->age) ? null : trim((string) $this->age);
+        $computedAge = 0;
+        if (!empty($dateOfBirth) && strtolower($dateOfBirth) !== 'null' && $dateOfBirth !== '0') {
+            try {
+                $dob = Carbon::parse($dateOfBirth);
+                $computedAge = $dob->isFuture() ? 0 : $dob->age;
+            } catch (\Throwable $e) {
+                $computedAge = 0;
+            }
+        }
 
         return [
             'id'=>(string)$this->id,
@@ -28,7 +35,7 @@ class UserResource extends JsonResource
                 'user_img'=>$this->user_img,
                 'phone'=>$this->phone,
                 'dob'=>$this->age,
-                'age'=>$diff->format('%y'),
+                'age'=>(string)$computedAge,
                 'gender'=>$this->gender,
                 'address'=>$this->address,
                 'lat'=>$this->lat,

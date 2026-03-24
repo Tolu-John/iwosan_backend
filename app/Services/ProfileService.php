@@ -19,20 +19,21 @@ class ProfileService
         $this->updateUserFromPayload($user, $userData);
 
         $patient->user_id = $data['user_id'];
-        $patient->bloodtype = $data['bloodtype'];
-        $patient->genotype = $data['genotype'];
-        $patient->temperature = $data['temperature'];
-        $patient->sugar_level = $data['sugar_level'];
-        $patient->bp_dia = $data['bp_dia'];
-        $patient->bp_sys = $data['bp_sys'];
-        $patient->weight = $data['weight'];
-        $patient->height = $data['height'];
-        $patient->kin_name = $data['kin_name'];
-        $patient->kin_phone = $data['kin_phone'];
-        $patient->kin_address = $data['kin_address'];
-        $patient->other_kin_name = $data['other_kin_name'];
-        $patient->other_kin_phone = $data['other_kin_phone'];
-        $patient->other_kin_address = $data['other_kin_address'];
+
+        $this->setIfProvided($patient, 'bloodtype', $data);
+        $this->setIfProvided($patient, 'genotype', $data);
+        $this->setIfProvided($patient, 'temperature', $data);
+        $this->setIfProvided($patient, 'sugar_level', $data);
+        $this->setIfProvided($patient, 'bp_dia', $data);
+        $this->setIfProvided($patient, 'bp_sys', $data);
+        $this->setIfProvided($patient, 'weight', $data);
+        $this->setIfProvided($patient, 'height', $data);
+        $this->setIfProvided($patient, 'kin_name', $data);
+        $this->setIfProvided($patient, 'kin_phone', $data);
+        $this->setIfProvided($patient, 'kin_address', $data);
+        $this->setIfProvided($patient, 'other_kin_name', $data);
+        $this->setIfProvided($patient, 'other_kin_phone', $data);
+        $this->setIfProvided($patient, 'other_kin_address', $data);
         $patient->save();
 
         return $patient;
@@ -125,17 +126,44 @@ class ProfileService
 
     private function updateUserFromPayload(User $user, array $userData): void
     {
-        $user->firedb_id = $userData['firedb_id'];
-        $user->firstname = $userData['firstname'];
-        $user->lastname = $userData['lastname'];
-        $user->email = $userData['email'];
-        $user->age = $userData['dob'] ?? $user->age;
-        $user->phone = $userData['phone'];
-        $user->gender = $userData['gender'];
-        $user->address = $userData['address'];
-        $user->lat = $userData['lat'];
-        $user->lon = $userData['lon'];
+        if (array_key_exists('firedb_id', $userData) && !$this->isBlank($userData['firedb_id'])) {
+            $user->firedb_id = $userData['firedb_id'];
+        }
+        if (array_key_exists('firstname', $userData) && !$this->isBlank($userData['firstname'])) {
+            $user->firstname = $userData['firstname'];
+        }
+        if (array_key_exists('lastname', $userData) && !$this->isBlank($userData['lastname'])) {
+            $user->lastname = $userData['lastname'];
+        }
+        if (array_key_exists('email', $userData) && !$this->isBlank($userData['email'])) {
+            $user->email = $userData['email'];
+        }
+        if (array_key_exists('dob', $userData) && !$this->isBlank($userData['dob'])) {
+            $user->age = $userData['dob'];
+        }
+        if (array_key_exists('phone', $userData) && !$this->isBlank($userData['phone'])) {
+            $user->phone = $userData['phone'];
+        }
+        if (array_key_exists('gender', $userData) && !$this->isBlank($userData['gender'])) {
+            $user->gender = $userData['gender'];
+        }
+        if (array_key_exists('address', $userData) && !$this->isBlank($userData['address'])) {
+            $user->address = $userData['address'];
+        }
+        if (array_key_exists('lat', $userData) && !$this->isBlank($userData['lat'])) {
+            $user->lat = $userData['lat'];
+        }
+        if (array_key_exists('lon', $userData) && !$this->isBlank($userData['lon'])) {
+            $user->lon = $userData['lon'];
+        }
         $user->save();
+    }
+
+    private function setIfProvided(Patient $patient, string $field, array $data): void
+    {
+        if (array_key_exists($field, $data) && !$this->isBlank($data[$field])) {
+            $patient->{$field} = $data[$field];
+        }
     }
 
     private function assertUserMatchesPatient(Patient $patient, array $data): void

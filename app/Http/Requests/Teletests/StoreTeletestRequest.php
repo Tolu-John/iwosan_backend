@@ -24,6 +24,21 @@ class StoreTeletestRequest extends FormRequest
 
     public function rules(): array
     {
+        $workflowStatuses = array_keys((array) config('teletest_workflow.statuses', []));
+        $legacyStatuses = [
+            'requested',
+            'pending',
+            'confirmed',
+            'assigned',
+            'pending_payment',
+            'result_uploaded',
+            'validated',
+            'completed',
+            'cancelled',
+            'no_show',
+        ];
+        $allowedStatuses = implode(',', array_values(array_unique(array_merge($workflowStatuses, $legacyStatuses))));
+
         return [
             'patient_id' => 'required|integer',
             'carer_id' => 'required|integer',
@@ -32,7 +47,7 @@ class StoreTeletestRequest extends FormRequest
             'payment_id' => 'nullable|integer',
             'address' => 'required|string|max:500',
             'test_name' => 'required|string|max:255',
-            'status' => 'required|string|in:pending_payment,scheduled,in_progress,completed,cancelled,no_show',
+            'status' => 'required|string|in:' . $allowedStatuses,
             'date_time' => 'required|string|max:100',
             'admin_approved' => 'required',
             'status_reason' => 'nullable|string|max:255',

@@ -70,6 +70,8 @@ protected $fillable=[
     'reuse',
     'type',
     'type_id',
+    'quote_id',
+    'billing_cycle_id',
 
 
 ];
